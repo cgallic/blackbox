@@ -146,40 +146,11 @@ def main():
     tested_files = get_tested_files(h)
     covered, missing = check_test_coverage(expected_tests, tested_files)
 
-    # Determine if this commit has testable code
-    has_testable_code = len(expected_tests) > 0
-
     was_overridden = False
-    should_block = False
-    block_reason = ""
-
-    if has_testable_code and missing and not tests_passed:
-        # Testable code changed, tests not run, specific files missing
-        should_block = True
-        block_reason = "BLOCKED: Changed files have no matching test coverage.\n"
-        block_reason += "\nUntested changes:"
-        for source, patterns in missing[:5]:
-            block_reason += f"\n  x {source}"
-            block_reason += f"\n    expected: {' or '.join(patterns)}"
-        if covered:
-            block_reason += f"\n\nCovered ({len(covered)}):"
-            for source, test in covered[:5]:
-                block_reason += f"\n  + {source} -> {test}"
-    elif has_testable_code and not tests_passed:
-        # Testable code changed, tests not run
-        should_block = True
-        block_reason = "BLOCKED: Cannot commit testable code without passing tests first."
-        if staged_files:
-            block_reason += f"\n\nChanged files ({len(staged_files)}):"
-            for f in staged_files[:10]:
-                block_reason += f"\n  - {f}"
-    # If no testable code (all config/docs/unknown) — allow without tests
-
-    if should_block:
+    if not tests_passed or missing:
         override_reason = get_override(h, "commit")
         if override_reason:
             was_overridden = True
-            should_block = False
 
     # Log to compliance
     log_compliance(proj_dir, {
@@ -191,22 +162,50 @@ def main():
         "staged_files": staged_files[:20],
         "tests_covered": [s for s, _ in covered],
         "tests_missing": [s for s, _ in missing],
-        "has_testable_code": has_testable_code,
     })
 
-    if should_block:
-        vtype = "commit_missing_tests" if missing else "commit_without_test"
-        count = increment_violation(h, vtype)
-        block_reason += f"\n\nRun the relevant tests, or: blackbox override commit --reason \"...\""
-        block_reason += f"\n(violation #{count})"
+    # Build block reason
+    if not tests_passed and not was_overridden:
+        count = increment_violation(h, "commit_without_test")
+        reason = "BLOCKED: Cannot commit without passing tests first."
+        if staged_files:
+            reason += f"\n\nChanged files ({len(staged_files)}):"
+            for f in staged_files[:10]:
+                reason += f"\n  - {f}"
+        reason += f"\n\n(violation #{count})"
 
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": block_reason,
+                "permissionDecisionReason": reason,
             }
         }))
+        return
+
+    if missing and not was_overridden:
+        count = increment_violation(h, "commit_missing_tests")
+
+        reason = "BLOCKED: Changed files have no matching test coverage.\n"
+        reason += "\nUntested changes:"
+        for source, patterns in missing[:5]:
+            reason += f"\n  x {source}"
+            reason += f"\n    expected: {' or '.join(patterns)}"
+        if covered:
+            reason += f"\n\nCovered ({len(covered)}):"
+            for source, test in covered[:5]:
+                reason += f"\n  + {source} -> {test}"
+        reason += f"\n\nRun the relevant tests, or: blackbox override commit --reason \"...\""
+        reason += f"\n(violation #{count})"
+
+        print(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }))
+        return
 
 
 if __name__ == "__main__":
