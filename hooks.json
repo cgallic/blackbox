@@ -1,0 +1,80 @@
+{
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/session_init.py",
+          "timeout": 3,
+          "statusMessage": "Initializing compliance tracking..."
+        }
+      ]
+    }
+  ],
+  "PreToolUse": [
+    {
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/check_commit.py",
+          "timeout": 3,
+          "statusMessage": "Checking commit compliance..."
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "Read",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/track_read.py",
+          "timeout": 2,
+          "statusMessage": "Tracking read..."
+        }
+      ]
+    },
+    {
+      "matcher": "Edit",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/check_edit.py",
+          "timeout": 2,
+          "statusMessage": "Checking edit compliance..."
+        }
+      ]
+    },
+    {
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/track_test.py",
+          "timeout": 2,
+          "statusMessage": "Tracking test runs..."
+        },
+        {
+          "type": "command",
+          "command": "python .claude/hooks/track_safety.py",
+          "timeout": 2,
+          "statusMessage": "Tracking safety signals..."
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python .claude/hooks/session_end.py",
+          "timeout": 5,
+          "statusMessage": "Writing session compliance summary..."
+        }
+      ]
+    }
+  ]
+}

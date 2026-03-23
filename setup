@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -e
+
+# retro-loop setup
+# Installs skills, hooks, and scripts into your Claude Code project.
+
+RETRO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "retro-loop setup"
+echo "================"
+echo ""
+
+# 1. Symlink skills
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+
+if [ -L "$SKILLS_DIR/retro-session" ] || [ -d "$SKILLS_DIR/retro-session" ]; then
+    echo "[skip] retro-session skill already exists"
+else
+    ln -s "$RETRO_DIR/skills/retro-session" "$SKILLS_DIR/retro-session"
+    echo "[ok] Linked retro-session skill"
+fi
+
+if [ -L "$SKILLS_DIR/retro-dev" ] || [ -d "$SKILLS_DIR/retro-dev" ]; then
+    echo "[skip] retro-dev skill already exists"
+else
+    ln -s "$RETRO_DIR/skills/retro-dev" "$SKILLS_DIR/retro-dev"
+    echo "[ok] Linked retro-dev skill"
+fi
+
+echo ""
+echo "Skills installed. Available commands:"
+echo "  /retro-session  - Score a session after completing work"
+echo "  /retro-dev      - Weekly retrospective to mine patterns and update rules"
+echo ""
+echo "To install hooks and scripts in a project, run from the project root:"
+echo "  $RETRO_DIR/setup-project"
+echo ""
+echo "Done."

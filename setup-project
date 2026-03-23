@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -e
+
+# retro-loop project setup
+# Run this from the root of any project to install hooks and scripts.
+
+RETRO_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(pwd)"
+
+echo "retro-loop project setup"
+echo "========================"
+echo "Project: $PROJECT_DIR"
+echo ""
+
+# 1. Copy hooks
+mkdir -p "$PROJECT_DIR/.claude/hooks"
+cp "$RETRO_DIR/hooks/"*.py "$PROJECT_DIR/.claude/hooks/"
+echo "[ok] Copied hooks to .claude/hooks/"
+
+# 2. Copy scripts
+mkdir -p "$PROJECT_DIR/scripts"
+cp "$RETRO_DIR/scripts/backfill_sessions.py" "$PROJECT_DIR/scripts/"
+cp "$RETRO_DIR/scripts/audit_sessions.py" "$PROJECT_DIR/scripts/"
+echo "[ok] Copied scripts to scripts/"
+
+# 3. Create sessions directory
+mkdir -p "$PROJECT_DIR/.claude/sessions"
+echo "[ok] Created .claude/sessions/"
+
+# 4. Add to .gitignore
+if [ -f "$PROJECT_DIR/.gitignore" ]; then
+    if ! grep -q ".claude/sessions/" "$PROJECT_DIR/.gitignore" 2>/dev/null; then
+        echo "" >> "$PROJECT_DIR/.gitignore"
+        echo "# retro-loop session logs" >> "$PROJECT_DIR/.gitignore"
+        echo ".claude/sessions/" >> "$PROJECT_DIR/.gitignore"
+        echo "[ok] Added .claude/sessions/ to .gitignore"
+    else
+        echo "[skip] .claude/sessions/ already in .gitignore"
+    fi
+else
+    echo ".claude/sessions/" > "$PROJECT_DIR/.gitignore"
+    echo "[ok] Created .gitignore with .claude/sessions/"
+fi
+
+# 5. Merge hooks into settings.local.json
+SETTINGS="$PROJECT_DIR/.claude/settings.local.json"
+if [ -f "$SETTINGS" ]; then
+    # Check if hooks already configured
+    if python -c "import json; d=json.load(open('$SETTINGS')); exit(0 if 'hooks' in d else 1)" 2>/dev/null; then
+        echo "[skip] Hooks already in settings.local.json — merge manually if needed"
+    else
+        python -c "
+import json
+with open('$SETTINGS') as f:
+    settings = json.load(f)
+settings['hooks'] = $(cat "$RETRO_DIR/hooks.json")
+with open('$SETTINGS', 'w') as f:
+    json.dump(settings, f, indent=2)
+    f.write('\n')
+"
+        echo "[ok] Merged hooks into settings.local.json"
+    fi
+else
+    # Create new settings with hooks
+    python -c "
+import json
+settings = {'hooks': $(cat "$RETRO_DIR/hooks.json")}
+with open('$SETTINGS', 'w') as f:
+    json.dump(settings, f, indent=2)
+    f.write('\n')
+"
+    echo "[ok] Created settings.local.json with hooks"
+fi
+
+echo ""
+echo "Project setup complete!"
+echo ""
+echo "Hooks active:"
+echo "  SessionStart  -> session_init.py (reset tracking)"
+echo "  PostToolUse   -> track_read.py (log file reads)"
+echo "  PostToolUse   -> check_edit.py (verify read-before-edit)"
+echo "  PostToolUse   -> track_test.py (log test runs)"
+echo "  PreToolUse    -> check_commit.py (verify test-before-commit)"
+echo "  PostToolUse   -> track_safety.py (log destructive commands)"
+echo "  Stop          -> session_end.py (aggregate compliance)"
+echo ""
+echo "Commands:"
+echo "  python scripts/audit_sessions.py          # View audit report"
+echo "  python scripts/backfill_sessions.py       # Backfill from history"
+echo "  /retro-session                            # Score a session"
+echo "  /retro-dev                                # Weekly retrospective"
