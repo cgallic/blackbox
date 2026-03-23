@@ -64,7 +64,11 @@ def main():
         session_events = [e for e in all_events
                           if e.get("session_id") == current_sid
                           and e.get("type") != "session_start"]
-    else:
+        # If no matching events, fall back (session started before fix)
+        if not session_events:
+            current_sid = ""
+
+    if not current_sid:
         # Fallback: find last session_start and read forward
         last_start_idx = -1
         for i, e in enumerate(all_events):
@@ -72,7 +76,8 @@ def main():
                 last_start_idx = i
         if last_start_idx < 0:
             return
-        session_events = all_events[last_start_idx + 1:]
+        session_events = [e for e in all_events[last_start_idx + 1:]
+                          if e.get("type") != "session_summary"]
 
     edits_total = 0
     edits_no_read = 0
