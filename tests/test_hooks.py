@@ -570,9 +570,11 @@ def test_session_end_scorecard():
             result = json.loads(out.strip())
             scorecard = result.get("systemMessage", "")
             test("has systemMessage", bool(scorecard))
-            test("scorecard contains AGENT SCORECARD", "AGENT SCORECARD" in scorecard)
-            test("scorecard contains Score", "Score:" in scorecard)
-            test("scorecard contains timeline", "Timeline:" in scorecard or "EDIT" in scorecard)
+            test("scorecard contains SESSION SUMMARY", "SESSION SUMMARY" in scorecard)
+            test("scorecard shows guardrails section", "Guardrails triggered:" in scorecard)
+            test("scorecard shows edit blocked count", "Edit blocked (no read):" in scorecard)
+            test("scorecard shows session totals", "Session totals:" in scorecard)
+            test("scorecard shows retro hint", "/retro-session" in scorecard)
         else:
             test("outputs scorecard JSON", False, "no stdout output")
 
@@ -586,6 +588,10 @@ def test_session_end_scorecard():
             test("summary counts 2 edits", s['edits_total'] == 2)
             test("summary counts 1 edit without read", s['edits_without_read'] == 1)
             test("summary counts 1 safety trigger", s['safety_triggers'] == 1)
+            test("summary has guardrails_triggered dict", isinstance(s.get('guardrails_triggered'), dict))
+            test("summary has repeated_patterns list", isinstance(s.get('repeated_patterns'), list))
+            # Score: 10 - 0.5 (edit blocked) - 0.5 (safety) = 9.0
+            test("score reflects guardrails (9.0)", s['score'] == 9.0, f"got {s.get('score')}")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -610,6 +616,9 @@ def test_session_end_perfect_score():
         summaries = [e for e in entries if e['type'] == 'session_summary']
         if summaries:
             test("perfect session scores 10.0", summaries[0]['score'] == 10.0)
+            test("perfect session has no repeated patterns", summaries[0].get('repeated_patterns') == [])
+            test("perfect session guardrails all zero",
+                 all(v == 0 for v in summaries[0].get('guardrails_triggered', {}).values()))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -760,7 +769,7 @@ def test_session_lifecycle():
         if r4.stdout.decode().strip():
             result4 = json.loads(r4.stdout.decode().strip())
             scorecard = result4.get("systemMessage", "")
-            test("session end produces scorecard", "AGENT SCORECARD" in scorecard)
+            test("session end produces scorecard", "SESSION SUMMARY" in scorecard)
 
         # Verify compliance data
         entries = read_compliance(tmpdir)

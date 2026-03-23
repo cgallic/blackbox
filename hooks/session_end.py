@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Stop hook: build session timeline, calculate score, print scorecard."""
+"""Stop hook: build session summary, print scorecard with meaningful signals."""
 import json
 import os
-import re
 import hashlib
 from datetime import datetime, timezone
 
@@ -10,19 +9,45 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _violations import get_violations
 
-# Files that don't need tests — config, docs, assets, settings
-NON_TESTABLE = re.compile(
-    r'\.(md|json|ya?ml|toml|ini|txt|css|scss|less|svg|png|jpg|gif|ico|lock|env|sh|bash)$'
-    r'|\.gitignore$|settings\.local|CLAUDE\.md|README|LICENSE|CHANGELOG|setup$',
-    re.I,
-)
 
+def find_repeated_patterns(all_events, current_guardrails):
+    """Check prior session_summary entries for patterns that recur this session.
 
-def is_config_only_commit(staged_files):
-    """Return True if ALL staged files are non-testable (config/docs/assets)."""
-    if not staged_files:
-        return False  # Unknown = assume testable, enforce the rule
-    return all(NON_TESTABLE.search(f) for f in staged_files)
+    Returns list of pattern strings like "edit_blocked" that appeared in a
+    previous session AND this session.
+    """
+    prior_summaries = [e for e in all_events if e.get("type") == "session_summary"]
+    if not prior_summaries or not current_guardrails:
+        return []
+
+    repeated = []
+    # Build set of guardrail types triggered this session
+    current_types = set()
+    if current_guardrails.get("edit_blocked", 0) > 0:
+        current_types.add("edit_blocked")
+    if current_guardrails.get("commit_blocked", 0) > 0:
+        current_types.add("commit_blocked")
+    if current_guardrails.get("destructive_cmd_caught", 0) > 0:
+        current_types.add("destructive_cmd_caught")
+
+    for summary in prior_summaries:
+        prior_g = summary.get("guardrails_triggered", {})
+        if isinstance(prior_g, dict):
+            for gtype in current_types:
+                if prior_g.get(gtype, 0) > 0 and gtype not in repeated:
+                    repeated.append(gtype)
+        # Also check old-format summaries for backward compat
+        if summary.get("edits_without_read", 0) > 0 and "edit_blocked" in current_types:
+            if "edit_blocked" not in repeated:
+                repeated.append("edit_blocked")
+        if summary.get("commits_without_test", 0) > 0 and "commit_blocked" in current_types:
+            if "commit_blocked" not in repeated:
+                repeated.append("commit_blocked")
+        if summary.get("safety_triggers", 0) > 0 and "destructive_cmd_caught" in current_types:
+            if "destructive_cmd_caught" not in repeated:
+                repeated.append("destructive_cmd_caught")
+
+    return repeated
 
 
 def main():
@@ -50,7 +75,7 @@ def main():
         except Exception:
             pass
 
-    # Read all events, filter to THIS session only
+    # Read all events
     all_events = []
     with open(compliance, "r", encoding="utf-8") as f:
         for line in f:
@@ -60,21 +85,17 @@ def main():
                 continue
 
     if current_sid:
-        # Filter to events matching this session_id
         session_events = [e for e in all_events
                           if e.get("session_id") == current_sid
                           and e.get("type") != "session_start"]
-        # If no matching events, fall back (session started before fix)
         if not session_events:
             current_sid = ""
 
     if not current_sid:
         # Fallback: find last UNCLOSED session_start
-        # Walk backward — skip session_starts that already have a summary after them
         last_start_idx = -1
         for i in range(len(all_events) - 1, -1, -1):
             if all_events[i].get("type") == "session_start":
-                # Check if there's a session_summary after this start
                 has_summary = any(
                     all_events[j].get("type") == "session_summary"
                     for j in range(i + 1, len(all_events))
@@ -83,7 +104,6 @@ def main():
                     last_start_idx = i
                     break
         if last_start_idx < 0:
-            # All sessions are closed — use the very last start
             for i in range(len(all_events) - 1, -1, -1):
                 if all_events[i].get("type") == "session_start":
                     last_start_idx = i
@@ -93,150 +113,81 @@ def main():
         session_events = [e for e in all_events[last_start_idx + 1:]
                           if e.get("type") not in ("session_summary", "session_start")]
 
+    # --- COUNT SESSION SIGNALS ---
     edits_total = 0
     edits_no_read = 0
-    edits_overridden = 0
     commits_total = 0
-    commits_no_test = 0        # testable code committed without tests
-    commits_config_only = 0    # config-only commits (not penalized)
-    commits_overridden = 0
+    commits_no_test = 0
     safety_total = 0
-    overrides_total = 0
-    timeline = []
 
     for e in session_events:
         t = e.get("type")
-        ts_short = e.get("ts", "")[:19]
 
         if t == "edit_compliance":
             edits_total += 1
-            read_first = e.get("was_read_first", False)
-            overridden = e.get("was_overridden", False)
-            fname = os.path.basename(e.get("file", "?"))
-            if not read_first:
+            if not e.get("was_read_first", False):
                 edits_no_read += 1
-                if overridden:
-                    edits_overridden += 1
-                    timeline.append(f"  EDIT {fname} (override)")
-                else:
-                    timeline.append(f"  EDIT {fname} ** NO READ **")
-            else:
-                timeline.append(f"  EDIT {fname}")
 
         elif t == "commit_compliance":
             commits_total += 1
             tested = e.get("tests_passed_first", e.get("tests_ran_first", False))
-            overridden = e.get("was_overridden", False)
-            missing_tests = e.get("tests_missing", [])
-            covered_tests = e.get("tests_covered", [])
-            staged = e.get("staged_files", [])
-
-            has_testable = e.get("has_testable_code", True)
-            config_only = is_config_only_commit(staged) if staged else not has_testable
-
-            if config_only:
-                commits_config_only += 1
-                timeline.append(f"  COMMIT (config only, no tests needed)")
-            elif not tested and not missing_tests:
-                # No tests ran but also no specific missing tests identified
-                # Could be a project without a test suite — mild penalty only
-                if overridden:
-                    commits_overridden += 1
-                    timeline.append(f"  COMMIT (override: no tests)")
-                else:
-                    commits_no_test += 1
-                    timeline.append(f"  COMMIT ** NO TESTS **")
-            elif missing_tests:
-                if overridden:
-                    commits_overridden += 1
-                    timeline.append(f"  COMMIT (override: untested files)")
-                else:
-                    commits_no_test += 1
-                    for src in missing_tests[:2]:
-                        timeline.append(f"  COMMIT ** UNTESTED: {src} **")
-            else:
-                cov = f", {len(covered_tests)} covered" if covered_tests else ""
-                timeline.append(f"  COMMIT (tests passed{cov})")
+            if not tested:
+                commits_no_test += 1
 
         elif t == "safety_trigger":
             safety_total += 1
-            timeline.append(f"  SAFETY {e.get('pattern', '?')}")
 
-        elif t == "override_granted":
-            overrides_total += 1
-            timeline.append(f"  OVERRIDE {e.get('action', '?')}")
+    # Build guardrails dict
+    guardrails = {
+        "edit_blocked": edits_no_read,
+        "commit_blocked": commits_no_test,
+        "destructive_cmd_caught": safety_total,
+    }
+    guardrails_total = edits_no_read + commits_no_test + safety_total
 
-    violations = get_violations(h)
-    total_violations = sum(violations.values())
+    # Find repeated patterns from prior sessions
+    repeated_patterns = find_repeated_patterns(all_events, guardrails)
 
     # --- SCORING ---
-    # Ratio-based, not raw count. 1 miss in 20 edits != 1 miss in 2 edits.
+    # Simple formula: start at 10, deduct for guardrail triggers and repeats
     score = 10.0
-
-    # Edit compliance: penalize by miss RATE
-    if edits_total > 0:
-        miss_rate = (edits_no_read - edits_overridden) / edits_total
-        score -= miss_rate * 4.0  # 100% miss rate = -4, 50% = -2, 10% = -0.4
-        score -= edits_overridden / edits_total * 1.0  # overrides = mild penalty
-
-    # Commit compliance: only penalize testable commits
-    testable_commits = commits_total - commits_config_only
-    if testable_commits > 0:
-        bad_commits = commits_no_test - commits_overridden
-        miss_rate = bad_commits / testable_commits
-        score -= miss_rate * 4.0
-        score -= commits_overridden / testable_commits * 1.0
-
-    # Safety: -0.5 each
-    score -= safety_total * 0.5
-
-    # Escalation: repeated violations compound
-    if total_violations > 3:
-        score -= (total_violations - 3) * 0.25
-
-    score = max(0.0, min(10.0, round(score, 1)))
+    # Each guardrail trigger: -0.5
+    score -= guardrails_total * 0.5
+    # Repeated pattern from previous session: -1.5 per pattern
+    score -= len(repeated_patterns) * 1.5
+    score = max(0.0, round(score, 1))
 
     # --- SCORECARD ---
-    edit_pct = round((edits_total - edits_no_read) / edits_total * 100) if edits_total else 100
-    testable = commits_total - commits_config_only
-    commit_pct = round((testable - commits_no_test) / testable * 100) if testable > 0 else 100
-
-    bar_len = int(score)
-    bar = "#" * bar_len + "." * (10 - bar_len)
-
     lines = []
     lines.append("+----------------------------------------------------------+")
-    lines.append(f"|  AGENT SCORECARD -- {datetime.now().strftime('%Y-%m-%d')}                           |")
+    lines.append(f"|  SESSION SUMMARY -- {datetime.now().strftime('%Y-%m-%d'):<38s}|")
     lines.append("+----------------------------------------------------------+")
-    lines.append(f"|  Score: {score:4.1f} / 10                           {bar}   |")
     lines.append("|                                                          |")
+    lines.append("|  Guardrails triggered:                                   |")
+    lines.append(f"|    Edit blocked (no read):   {edits_no_read:>2}                          |")
+    lines.append(f"|    Commit blocked (no test): {commits_no_test:>2}                          |")
+    lines.append(f"|    Destructive cmd caught:   {safety_total:>2}                          |")
+    lines.append("|                                                          |")
+    lines.append(f"|  Session totals:                                         |")
+    lines.append(f"|    Files edited: {edits_total:>3}                                        |")
+    lines.append(f"|    Commits:      {commits_total:>3}                                        |")
 
-    if edits_total > 0:
-        mark = "x" if edits_no_read > 0 else "+"
-        lines.append(f"|  {mark} Edits read first:     {edits_total - edits_no_read:>2} / {edits_total:>2}          {edit_pct:>3}%    |")
-
-    if testable > 0:
-        mark = "x" if commits_no_test > 0 else "+"
-        lines.append(f"|  {mark} Commits with tests:   {testable - commits_no_test:>2} / {testable:>2}          {commit_pct:>3}%    |")
-
-    if commits_config_only > 0:
-        lines.append(f"|    ({commits_config_only} config-only commit(s) -- no tests needed)    |")
-
-    if safety_total > 0:
-        lines.append(f"|  x Destructive cmds:    {safety_total}                               |")
-    if overrides_total > 0:
-        lines.append(f"|    Overrides used:      {overrides_total}                               |")
-
-    if timeline:
+    if repeated_patterns:
         lines.append("|                                                          |")
-        for tl in timeline[-10:]:
-            entry = tl[:56]
-            lines.append(f"|  {entry:<56s}|")
+        lines.append("|  Repeated from prior sessions:                           |")
+        for pat in repeated_patterns:
+            label = pat.replace("_", " ")
+            lines.append(f"|    - {label:<53s}|")
 
+    lines.append("|                                                          |")
+    lines.append("|  Run /retro-session for full scoring + corrections.      |")
+    lines.append("|  Run /retro weekly to mine patterns and update rules.    |")
+    lines.append("|                                                          |")
     lines.append("+----------------------------------------------------------+")
 
     scorecard_text = "\n".join(lines)
 
+    # --- WRITE SUMMARY ---
     summary = {
         "type": "session_summary",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -244,16 +195,11 @@ def main():
         "score": score,
         "edits_total": edits_total,
         "edits_without_read": edits_no_read,
-        "edits_overridden": edits_overridden,
-        "edit_compliance_pct": round((edits_total - edits_no_read) / edits_total * 100, 1) if edits_total else None,
         "commits_total": commits_total,
-        "commits_config_only": commits_config_only,
         "commits_without_test": commits_no_test,
-        "commits_overridden": commits_overridden,
-        "commit_compliance_pct": round((testable - commits_no_test) / testable * 100, 1) if testable else None,
         "safety_triggers": safety_total,
-        "overrides_used": overrides_total,
-        "total_violations": total_violations,
+        "guardrails_triggered": guardrails,
+        "repeated_patterns": repeated_patterns,
     }
 
     with open(compliance, "a", encoding="utf-8") as f:
