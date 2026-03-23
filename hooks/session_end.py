@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Stop hook: build session timeline, calculate score, print scorecard.
-
-Major upgrade: reads compliance events, builds ordered timeline,
-calculates score with override/violation penalties, and outputs
-the scorecard as a systemMessage.
-"""
+"""Stop hook: build session timeline, calculate score, print scorecard."""
 import json
 import os
+import re
 import hashlib
-import tempfile
 from datetime import datetime, timezone
 
-# Allow importing _violations from same directory
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _violations import get_violations
+
+# Files that don't need tests — config, docs, assets, settings
+NON_TESTABLE = re.compile(
+    r'\.(md|json|ya?ml|toml|ini|txt|css|scss|less|svg|png|jpg|gif|ico|lock|env|sh|bash)$'
+    r'|\.gitignore$|settings\.local|CLAUDE\.md|README|LICENSE|CHANGELOG|setup$',
+    re.I,
+)
+
+
+def is_config_only_commit(staged_files):
+    """Return True if ALL staged files are non-testable (config/docs/assets)."""
+    if not staged_files:
+        return True  # No staged files = can't determine, don't penalize
+    return all(NON_TESTABLE.search(f) for f in staged_files)
 
 
 def main():
@@ -25,11 +33,10 @@ def main():
     if not os.path.exists(compliance):
         return
 
-    # Read events since last session_start
     events = []
     last_start_idx = -1
     with open(compliance, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
+        for line in f:
             try:
                 events.append(json.loads(line.strip()))
                 if events[-1].get("type") == "session_start":
@@ -40,14 +47,14 @@ def main():
     if last_start_idx < 0:
         return
 
-    # Only count events from this session
     session_events = events[last_start_idx + 1:]
 
     edits_total = 0
     edits_no_read = 0
     edits_overridden = 0
     commits_total = 0
-    commits_no_test = 0
+    commits_no_test = 0        # testable code committed without tests
+    commits_config_only = 0    # config-only commits (not penalized)
     commits_overridden = 0
     safety_total = 0
     overrides_total = 0
@@ -61,15 +68,16 @@ def main():
             edits_total += 1
             read_first = e.get("was_read_first", False)
             overridden = e.get("was_overridden", False)
+            fname = os.path.basename(e.get("file", "?"))
             if not read_first:
                 edits_no_read += 1
                 if overridden:
                     edits_overridden += 1
-                    timeline.append(f"  {ts_short}  EDIT {e.get('file', '?')} (override: not read)")
+                    timeline.append(f"  EDIT {fname} (override)")
                 else:
-                    timeline.append(f"  {ts_short}  EDIT {e.get('file', '?')} ** NOT READ **")
+                    timeline.append(f"  EDIT {fname} ** NO READ **")
             else:
-                timeline.append(f"  {ts_short}  EDIT {e.get('file', '?')} (read first)")
+                timeline.append(f"  EDIT {fname}")
 
         elif t == "commit_compliance":
             commits_total += 1
@@ -77,57 +85,76 @@ def main():
             overridden = e.get("was_overridden", False)
             missing_tests = e.get("tests_missing", [])
             covered_tests = e.get("tests_covered", [])
-            if not tested:
-                commits_no_test += 1
+            staged = e.get("staged_files", [])
+
+            config_only = is_config_only_commit(staged)
+
+            if config_only:
+                commits_config_only += 1
+                timeline.append(f"  COMMIT (config only, no tests needed)")
+            elif not tested and not missing_tests:
+                # No tests ran but also no specific missing tests identified
+                # Could be a project without a test suite — mild penalty only
                 if overridden:
                     commits_overridden += 1
-                    timeline.append(f"  {ts_short}  COMMIT (override: no tests)")
+                    timeline.append(f"  COMMIT (override: no tests)")
                 else:
-                    timeline.append(f"  {ts_short}  COMMIT ** NO TESTS **")
+                    commits_no_test += 1
+                    timeline.append(f"  COMMIT ** NO TESTS **")
             elif missing_tests:
-                commits_no_test += 1
-                for src in missing_tests[:3]:
-                    timeline.append(f"  {ts_short}  COMMIT ** UNTESTED: {src} **")
+                if overridden:
+                    commits_overridden += 1
+                    timeline.append(f"  COMMIT (override: untested files)")
+                else:
+                    commits_no_test += 1
+                    for src in missing_tests[:2]:
+                        timeline.append(f"  COMMIT ** UNTESTED: {src} **")
             else:
-                cov = f" ({len(covered_tests)} files covered)" if covered_tests else ""
-                timeline.append(f"  {ts_short}  COMMIT (tests passed{cov})")
+                cov = f", {len(covered_tests)} covered" if covered_tests else ""
+                timeline.append(f"  COMMIT (tests passed{cov})")
 
         elif t == "safety_trigger":
             safety_total += 1
-            severity = e.get("severity", "warning")
-            timeline.append(f"  {ts_short}  SAFETY [{severity}] {e.get('pattern', '?')}: {e.get('command', '?')[:60]}")
+            timeline.append(f"  SAFETY {e.get('pattern', '?')}")
 
         elif t == "override_granted":
             overrides_total += 1
-            timeline.append(f"  {ts_short}  OVERRIDE {e.get('action', '?')}: {e.get('reason', '?')}")
+            timeline.append(f"  OVERRIDE {e.get('action', '?')}")
 
-    # Get violation counts from temp file
     violations = get_violations(h)
     total_violations = sum(violations.values())
 
-    # Calculate score (start at 10, deduct for issues)
+    # --- SCORING ---
+    # Ratio-based, not raw count. 1 miss in 20 edits != 1 miss in 2 edits.
     score = 10.0
 
-    # Edits without reading: -1 per violation, -0.5 if overridden
-    score -= (edits_no_read - edits_overridden) * 1.0
-    score -= edits_overridden * 0.5
+    # Edit compliance: penalize by miss RATE
+    if edits_total > 0:
+        miss_rate = (edits_no_read - edits_overridden) / edits_total
+        score -= miss_rate * 4.0  # 100% miss rate = -4, 50% = -2, 10% = -0.4
+        score -= edits_overridden / edits_total * 1.0  # overrides = mild penalty
 
-    # Commits without tests: -1.5 per violation, -0.75 if overridden
-    score -= (commits_no_test - commits_overridden) * 1.5
-    score -= commits_overridden * 0.75
+    # Commit compliance: only penalize testable commits
+    testable_commits = commits_total - commits_config_only
+    if testable_commits > 0:
+        bad_commits = commits_no_test - commits_overridden
+        miss_rate = bad_commits / testable_commits
+        score -= miss_rate * 4.0
+        score -= commits_overridden / testable_commits * 1.0
 
-    # Safety triggers: -0.5 per occurrence
+    # Safety: -0.5 each
     score -= safety_total * 0.5
 
-    # Repeated violations penalize more (escalation penalty)
-    if total_violations > 5:
-        score -= (total_violations - 5) * 0.25
+    # Escalation: repeated violations compound
+    if total_violations > 3:
+        score -= (total_violations - 3) * 0.25
 
     score = max(0.0, min(10.0, round(score, 1)))
 
-    # Build scorecard text
+    # --- SCORECARD ---
     edit_pct = round((edits_total - edits_no_read) / edits_total * 100) if edits_total else 100
-    commit_pct = round((commits_total - commits_no_test) / commits_total * 100) if commits_total else 100
+    testable = commits_total - commits_config_only
+    commit_pct = round((testable - commits_no_test) / testable * 100) if testable > 0 else 100
 
     bar_len = int(score)
     bar = "#" * bar_len + "." * (10 - bar_len)
@@ -136,33 +163,35 @@ def main():
     lines.append("+----------------------------------------------------------+")
     lines.append(f"|  AGENT SCORECARD -- {datetime.now().strftime('%Y-%m-%d')}                           |")
     lines.append("+----------------------------------------------------------+")
-    lines.append("|                                                          |")
     lines.append(f"|  Score: {score:4.1f} / 10                           {bar}   |")
     lines.append("|                                                          |")
 
     if edits_total > 0:
-        lines.append(f"|  Edits without reading first:  {edits_no_read} / {edits_total:>2}          {edit_pct:>3}%    |")
-    if commits_total > 0:
-        lines.append(f"|  Commits without tests:        {commits_no_test} / {commits_total:>2}          {commit_pct:>3}%    |")
-    if safety_total > 0:
-        lines.append(f"|  Destructive commands caught:  {safety_total}                         |")
-    if overrides_total > 0:
-        lines.append(f"|  Overrides used:               {overrides_total}                         |")
+        mark = "x" if edits_no_read > 0 else "+"
+        lines.append(f"|  {mark} Edits read first:     {edits_total - edits_no_read:>2} / {edits_total:>2}          {edit_pct:>3}%    |")
 
-    lines.append("|                                                          |")
+    if testable > 0:
+        mark = "x" if commits_no_test > 0 else "+"
+        lines.append(f"|  {mark} Commits with tests:   {testable - commits_no_test:>2} / {testable:>2}          {commit_pct:>3}%    |")
+
+    if commits_config_only > 0:
+        lines.append(f"|    ({commits_config_only} config-only commit(s) -- no tests needed)    |")
+
+    if safety_total > 0:
+        lines.append(f"|  x Destructive cmds:    {safety_total}                               |")
+    if overrides_total > 0:
+        lines.append(f"|    Overrides used:      {overrides_total}                               |")
 
     if timeline:
-        lines.append("|  Timeline:                                               |")
-        for tl in timeline[-8:]:  # Show last 8 events
+        lines.append("|                                                          |")
+        for tl in timeline[-10:]:
             entry = tl[:56]
             lines.append(f"|  {entry:<56s}|")
 
-    lines.append("|                                                          |")
     lines.append("+----------------------------------------------------------+")
 
     scorecard_text = "\n".join(lines)
 
-    # Write session summary to compliance
     summary = {
         "type": "session_summary",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -173,22 +202,19 @@ def main():
         "edits_overridden": edits_overridden,
         "edit_compliance_pct": round((edits_total - edits_no_read) / edits_total * 100, 1) if edits_total else None,
         "commits_total": commits_total,
+        "commits_config_only": commits_config_only,
         "commits_without_test": commits_no_test,
         "commits_overridden": commits_overridden,
-        "commit_compliance_pct": round((commits_total - commits_no_test) / commits_total * 100, 1) if commits_total else None,
+        "commit_compliance_pct": round((testable - commits_no_test) / testable * 100, 1) if testable else None,
         "safety_triggers": safety_total,
         "overrides_used": overrides_total,
         "total_violations": total_violations,
-        "timeline_events": len(timeline),
     }
 
     with open(compliance, "a", encoding="utf-8") as f:
         f.write(json.dumps(summary) + "\n")
 
-    # Output scorecard as systemMessage (top-level for Stop hooks)
-    output = {
-        "systemMessage": scorecard_text,
-    }
+    output = {"systemMessage": scorecard_text}
     print(json.dumps(output))
 
 
