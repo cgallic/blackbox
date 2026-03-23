@@ -18,6 +18,18 @@ def get_project_hash(proj_dir=None):
     return hashlib.md5(proj_dir.encode()).hexdigest()[:8]
 
 
+def get_session_id(project_hash=None):
+    """Read the current session_id from temp file (written by session_init)."""
+    if project_hash is None:
+        project_hash = get_project_hash()
+    path = os.path.join(tempfile.gettempdir(), f"claude-session-{project_hash}.txt")
+    try:
+        with open(path, "r") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
 def _violations_path(project_hash):
     return os.path.join(tempfile.gettempdir(), f"claude-violations-{project_hash}.json")
 
@@ -79,7 +91,13 @@ def get_override(project_hash, action):
 
 
 def log_compliance(proj_dir, entry):
-    """Append a compliance entry to .claude/sessions/compliance.jsonl."""
+    """Append a compliance entry to .claude/sessions/compliance.jsonl.
+
+    Auto-injects session_id if not present.
+    """
+    h = get_project_hash(proj_dir)
+    if "session_id" not in entry:
+        entry["session_id"] = get_session_id(h)
     sessions_dir = os.path.join(proj_dir, ".claude", "sessions")
     os.makedirs(sessions_dir, exist_ok=True)
     compliance = os.path.join(sessions_dir, "compliance.jsonl")

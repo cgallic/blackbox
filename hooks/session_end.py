@@ -33,21 +33,46 @@ def main():
     if not os.path.exists(compliance):
         return
 
-    events = []
-    last_start_idx = -1
+    # Read session_id from stdin (Stop hook receives it)
+    current_sid = ""
+    try:
+        data = json.load(sys.stdin)
+        current_sid = data.get("session_id", "")
+    except Exception:
+        pass
+
+    # Fallback: read from temp file
+    if not current_sid:
+        sid_file = os.path.join(__import__('tempfile').gettempdir(), f"claude-session-{h}.txt")
+        try:
+            with open(sid_file, "r") as f:
+                current_sid = f.read().strip()
+        except Exception:
+            pass
+
+    # Read all events, filter to THIS session only
+    all_events = []
     with open(compliance, "r", encoding="utf-8") as f:
         for line in f:
             try:
-                events.append(json.loads(line.strip()))
-                if events[-1].get("type") == "session_start":
-                    last_start_idx = len(events) - 1
+                all_events.append(json.loads(line.strip()))
             except Exception:
                 continue
 
-    if last_start_idx < 0:
-        return
-
-    session_events = events[last_start_idx + 1:]
+    if current_sid:
+        # Filter to events matching this session_id
+        session_events = [e for e in all_events
+                          if e.get("session_id") == current_sid
+                          and e.get("type") != "session_start"]
+    else:
+        # Fallback: find last session_start and read forward
+        last_start_idx = -1
+        for i, e in enumerate(all_events):
+            if e.get("type") == "session_start":
+                last_start_idx = i
+        if last_start_idx < 0:
+            return
+        session_events = all_events[last_start_idx + 1:]
 
     edits_total = 0
     edits_no_read = 0

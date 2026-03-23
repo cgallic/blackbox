@@ -100,8 +100,13 @@ hooks_config = {
             "hooks": [{"type": "command", "command": "python .claude/hooks/track_read.py", "timeout": 2}]
         },
         {
+            "matcher": "Grep",
+            "hooks": [{"type": "command", "command": "python .claude/hooks/track_read.py", "timeout": 2}]
+        },
+        {
             "matcher": "Bash",
             "hooks": [
+                {"type": "command", "command": "python .claude/hooks/track_read.py", "timeout": 2},
                 {"type": "command", "command": "python .claude/hooks/track_test.py", "timeout": 2},
                 {"type": "command", "command": "python .claude/hooks/track_safety.py", "timeout": 2}
             ]
