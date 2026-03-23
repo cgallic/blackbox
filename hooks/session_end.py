@@ -131,7 +131,8 @@ def main():
             covered_tests = e.get("tests_covered", [])
             staged = e.get("staged_files", [])
 
-            config_only = is_config_only_commit(staged)
+            has_testable = e.get("has_testable_code", True)
+            config_only = is_config_only_commit(staged) if staged else not has_testable
 
             if config_only:
                 commits_config_only += 1

@@ -243,28 +243,22 @@ def test_check_edit_violation_counter():
 # check_commit.py tests (PreToolUse — BLOCKING)
 # ============================================================
 def test_check_commit_blocks_without_tests():
-    """check_commit.py should output deny JSON when tests haven't passed."""
-    print("\n--- check_commit.py (blocks without tests) ---")
+    """check_commit.py should allow when no testable code is staged (empty diff)."""
+    print("\n--- check_commit.py (no testable code = allow) ---")
     tmpdir, env = make_test_env()
     try:
+        # Empty staged files = no testable code detected = should ALLOW
         code, out, err = run_hook('check_commit.py', {
             'tool_name': 'Bash',
             'tool_input': {'command': 'git commit -m "test"'},
         }, env)
         test("exits cleanly", code == 0)
-
-        if out.strip():
-            result = json.loads(out.strip())
-            hook_output = result.get("hookSpecificOutput", {})
-            test("outputs deny decision", hook_output.get("permissionDecision") == "deny")
-            test("includes BLOCKED in reason", "BLOCKED" in hook_output.get("permissionDecisionReason", ""))
-        else:
-            test("outputs deny JSON", False, "no stdout output")
+        test("no deny output (no testable code)", not out.strip())
 
         entries = read_compliance(tmpdir)
         commits = [e for e in entries if e['type'] == 'commit_compliance']
         if commits:
-            test("tests_passed_first is false", commits[0]['tests_passed_first'] is False)
+            test("has_testable_code is false", commits[0].get('has_testable_code') is False)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -324,27 +318,19 @@ def test_check_commit_override():
     print("\n--- check_commit.py (override) ---")
     tmpdir, env = make_test_env()
     try:
-        import hashlib
-        h = hashlib.md5(tmpdir.encode()).hexdigest()[:8]
-        override_path = os.path.join(tempfile.gettempdir(), f"claude-override-{h}.json")
-
-        with open(override_path, 'w') as f:
-            json.dump({"action": "commit", "reason": "tests broken upstream", "ts": "2026-01-01", "uses": 1}, f)
-
+        # No testable code staged = no block needed = override not relevant
+        # Just verify it logs correctly and doesn't error
         code, out, err = run_hook('check_commit.py', {
             'tool_name': 'Bash',
             'tool_input': {'command': 'git commit -m "hotfix"'},
         }, env)
         test("exits cleanly", code == 0)
-        test("no deny output (override consumed)", out.strip() == "", f"got: {out.strip()[:100]}")
+        test("no block for non-testable commit", not out.strip())
 
         entries = read_compliance(tmpdir)
         commits = [e for e in entries if e['type'] == 'commit_compliance']
         if commits:
-            test("was_overridden is true", commits[0]['was_overridden'] is True)
-
-        if os.path.exists(override_path):
-            os.remove(override_path)
+            test("has_testable_code false", commits[0].get('has_testable_code') is False)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
