@@ -185,12 +185,9 @@ def main():
     with open(compliance, "a", encoding="utf-8") as f:
         f.write(json.dumps(summary) + "\n")
 
-    # Output scorecard as systemMessage
+    # Output scorecard as systemMessage (top-level for Stop hooks)
     output = {
-        "hookSpecificOutput": {
-            "hookEventName": "Stop",
-            "systemMessage": scorecard_text,
-        }
+        "systemMessage": scorecard_text,
     }
     print(json.dumps(output))
 

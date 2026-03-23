@@ -568,9 +568,8 @@ def test_session_end_scorecard():
 
         if out.strip():
             result = json.loads(out.strip())
-            hook_output = result.get("hookSpecificOutput", {})
-            test("has Stop hookEventName", hook_output.get("hookEventName") == "Stop")
-            scorecard = hook_output.get("systemMessage", "")
+            scorecard = result.get("systemMessage", "")
+            test("has systemMessage", bool(scorecard))
             test("scorecard contains AGENT SCORECARD", "AGENT SCORECARD" in scorecard)
             test("scorecard contains Score", "Score:" in scorecard)
             test("scorecard contains timeline", "Timeline:" in scorecard or "EDIT" in scorecard)
@@ -760,7 +759,7 @@ def test_session_lifecycle():
         r4 = run('session_end.py', {})
         if r4.stdout.decode().strip():
             result4 = json.loads(r4.stdout.decode().strip())
-            scorecard = result4.get("hookSpecificOutput", {}).get("systemMessage", "")
+            scorecard = result4.get("systemMessage", "")
             test("session end produces scorecard", "AGENT SCORECARD" in scorecard)
 
         # Verify compliance data
