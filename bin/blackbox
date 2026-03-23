@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# blackbox CLI — observability tool for Claude Code agents
+set -e
+
+BLACKBOX_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+case "$1" in
+  init)
+    bash "$BLACKBOX_DIR/setup" "${@:2}"
+    ;;
+  report)
+    python "$BLACKBOX_DIR/scripts/report.py" "${@:2}"
+    ;;
+  history)
+    python "$BLACKBOX_DIR/scripts/report.py" --trend "${@:2}"
+    ;;
+  backfill)
+    python "$BLACKBOX_DIR/scripts/backfill.py" "${@:2}"
+    ;;
+  override)
+    python "$BLACKBOX_DIR/hooks/_override.py" "${@:2}"
+    ;;
+  version)
+    cat "$BLACKBOX_DIR/VERSION"
+    ;;
+  help|--help|-h|"")
+    echo "blackbox — observability for Claude Code agents"
+    echo ""
+    echo "Usage: blackbox <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  init              Install hooks and skills into current project"
+    echo "  report            Full audit dashboard"
+    echo "  history           Score trend over sessions"
+    echo "  backfill [key]    Mine past Claude Code transcripts for patterns"
+    echo "  override <action> Override a blocked action (edit|commit)"
+    echo "  version           Print version"
+    echo "  help              Show this help"
+    echo ""
+    echo "Inside Claude Code:"
+    echo "  /scorecard        Show scorecard for current session"
+    echo "  /retro            Weekly retrospective — mine patterns, update rules"
+    echo ""
+    echo "Examples:"
+    echo "  blackbox report --last 7"
+    echo "  blackbox override edit --reason \"emergency hotfix\""
+    echo "  blackbox backfill my-project-key"
+    ;;
+  *)
+    echo "Unknown command: $1"
+    echo "Run 'blackbox help' for usage."
+    exit 1
+    ;;
+esac

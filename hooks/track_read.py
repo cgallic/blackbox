@@ -6,6 +6,7 @@ import os
 import hashlib
 import tempfile
 
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -24,6 +25,7 @@ def main():
 
     with open(reads_file, "a", encoding="utf-8") as f:
         f.write(fp + "\n")
+
 
 if __name__ == "__main__":
     main()

@@ -1,39 +1,141 @@
 #!/usr/bin/env bash
 set -e
 
-# retro-loop setup
-# Installs skills, hooks, and scripts into your Claude Code project.
+# blackbox setup — merged installer
+# Installs skills globally and hooks into the current project (if git repo).
 
 RETRO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "retro-loop setup"
-echo "================"
+echo "blackbox setup"
+echo "=============="
 echo ""
 
-# 1. Symlink skills
+# 1. Symlink skills to ~/.claude/skills/
 SKILLS_DIR="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DIR"
 
-if [ -L "$SKILLS_DIR/retro-session" ] || [ -d "$SKILLS_DIR/retro-session" ]; then
-    echo "[skip] retro-session skill already exists"
-else
-    ln -s "$RETRO_DIR/skills/retro-session" "$SKILLS_DIR/retro-session"
-    echo "[ok] Linked retro-session skill"
-fi
-
-if [ -L "$SKILLS_DIR/retro-dev" ] || [ -d "$SKILLS_DIR/retro-dev" ]; then
-    echo "[skip] retro-dev skill already exists"
-else
-    ln -s "$RETRO_DIR/skills/retro-dev" "$SKILLS_DIR/retro-dev"
-    echo "[ok] Linked retro-dev skill"
-fi
+for skill in scorecard retro; do
+    target="$SKILLS_DIR/blackbox-$skill"
+    source="$RETRO_DIR/skills/$skill"
+    if [ -L "$target" ] || [ -d "$target" ]; then
+        echo "[skip] $skill skill already linked"
+    else
+        ln -s "$source" "$target"
+        echo "[ok]   Linked $skill skill -> $target"
+    fi
+done
 
 echo ""
-echo "Skills installed. Available commands:"
-echo "  /retro-session  - Score a session after completing work"
-echo "  /retro-dev      - Weekly retrospective to mine patterns and update rules"
+
+# 2. If CWD is a git repo, do project setup
+if git rev-parse --git-dir > /dev/null 2>&1; then
+    PROJECT_DIR="$(pwd)"
+    echo "Git repo detected: $PROJECT_DIR"
+    echo ""
+
+    # Copy hooks to .claude/hooks/
+    HOOKS_DEST="$PROJECT_DIR/.claude/hooks"
+    mkdir -p "$HOOKS_DEST"
+
+    for hook in session_init.py track_read.py check_edit.py track_test.py check_commit.py track_safety.py session_end.py _violations.py; do
+        cp "$RETRO_DIR/hooks/$hook" "$HOOKS_DEST/$hook"
+        echo "[ok]   Copied $hook"
+    done
+
+    # Create sessions directory
+    mkdir -p "$PROJECT_DIR/.claude/sessions"
+    echo "[ok]   Created .claude/sessions/"
+
+    # Add to .gitignore
+    GITIGNORE="$PROJECT_DIR/.gitignore"
+    touch "$GITIGNORE"
+    for pattern in ".claude/sessions/" ".claude/hooks/"; do
+        if ! grep -qF "$pattern" "$GITIGNORE" 2>/dev/null; then
+            echo "$pattern" >> "$GITIGNORE"
+            echo "[ok]   Added $pattern to .gitignore"
+        fi
+    done
+
+    # Merge hooks into settings.local.json using Python
+    SETTINGS="$PROJECT_DIR/.claude/settings.local.json"
+    python3 - "$SETTINGS" << 'PYEOF'
+import json
+import sys
+
+settings_path = sys.argv[1]
+
+# Load existing settings
+existing = {}
+try:
+    with open(settings_path, "r", encoding="utf-8") as f:
+        existing = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+
+# Define hooks config
+hooks_config = {
+    "SessionStart": [
+        {"hooks": [{"type": "command", "command": "python .claude/hooks/session_init.py", "timeout": 3}]}
+    ],
+    "PreToolUse": [
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {"type": "command", "command": "python .claude/hooks/check_commit.py", "timeout": 3, "statusMessage": "Checking commit compliance..."}
+            ]
+        },
+        {
+            "matcher": "Edit",
+            "hooks": [
+                {"type": "command", "command": "python .claude/hooks/check_edit.py", "timeout": 3, "statusMessage": "Checking edit compliance..."}
+            ]
+        }
+    ],
+    "PostToolUse": [
+        {
+            "matcher": "Read",
+            "hooks": [{"type": "command", "command": "python .claude/hooks/track_read.py", "timeout": 2}]
+        },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {"type": "command", "command": "python .claude/hooks/track_test.py", "timeout": 2},
+                {"type": "command", "command": "python .claude/hooks/track_safety.py", "timeout": 2}
+            ]
+        }
+    ],
+    "Stop": [
+        {"hooks": [{"type": "command", "command": "python .claude/hooks/session_end.py", "timeout": 5}]}
+    ]
+}
+
+# Merge: overwrite hooks section, preserve everything else
+existing["hooks"] = hooks_config
+
+with open(settings_path, "w", encoding="utf-8") as f:
+    json.dump(existing, f, indent=2)
+
+print("[ok]   Merged hooks into", settings_path)
+PYEOF
+
+    echo ""
+    echo "Project setup complete."
+else
+    echo "Not in a git repo — skipping project hooks setup."
+    echo "Run this from a git project root to install hooks."
+fi
+
 echo ""
-echo "To install hooks and scripts in a project, run from the project root:"
-echo "  $RETRO_DIR/setup-project"
+echo "Skills available:"
+echo "  /scorecard    Show agent compliance scorecard"
+echo "  /retro        Weekly retrospective and rule updates"
 echo ""
+
+# Suggest PATH addition
+if ! command -v blackbox &> /dev/null; then
+    echo "To add the blackbox CLI to your PATH:"
+    echo "  export PATH=\"$RETRO_DIR/bin:\$PATH\""
+    echo ""
+fi
+
 echo "Done."

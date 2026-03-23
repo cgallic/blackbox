@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""PostToolUse hook for Edit: check if the edited file was read first."""
+"""PreToolUse hook for Edit: BLOCK edits on files that haven't been read.
+
+Outputs deny JSON if file was not read first (unless overridden).
+Logs to compliance.jsonl either way.
+"""
 import sys
 import json
 import os
 import hashlib
 import tempfile
 from datetime import datetime, timezone
+
+# Allow importing _violations from same directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _violations import get_override, increment_violation, log_compliance
+
 
 def main():
     try:
@@ -32,18 +41,38 @@ def main():
         except Exception:
             pass
 
-    sessions_dir = os.path.join(proj_dir, ".claude", "sessions")
-    os.makedirs(sessions_dir, exist_ok=True)
-    compliance = os.path.join(sessions_dir, "compliance.jsonl")
+    was_overridden = False
+    override_reason = None
 
-    entry = {
+    if not was_read:
+        # Check for override
+        override_reason = get_override(h, "edit")
+        if override_reason:
+            was_overridden = True
+
+    # Log to compliance
+    log_compliance(proj_dir, {
         "type": "edit_compliance",
         "ts": datetime.now(timezone.utc).isoformat(),
         "file": fp,
         "was_read_first": was_read,
-    }
-    with open(compliance, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
+        "was_overridden": was_overridden,
+    })
+
+    if not was_read and not was_overridden:
+        # Increment violation counter
+        count = increment_violation(h, "edit_without_read")
+
+        # Output deny JSON to block the edit
+        result = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"BLOCKED: Cannot edit {fp} -- read it first. (violation #{count})",
+            }
+        }
+        print(json.dumps(result))
+
 
 if __name__ == "__main__":
     main()
