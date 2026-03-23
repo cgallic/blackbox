@@ -21,7 +21,7 @@ NON_TESTABLE = re.compile(
 def is_config_only_commit(staged_files):
     """Return True if ALL staged files are non-testable (config/docs/assets)."""
     if not staged_files:
-        return True  # No staged files = can't determine, don't penalize
+        return False  # Unknown = assume testable, enforce the rule
     return all(NON_TESTABLE.search(f) for f in staged_files)
 
 
@@ -69,15 +69,29 @@ def main():
             current_sid = ""
 
     if not current_sid:
-        # Fallback: find last session_start and read forward
+        # Fallback: find last UNCLOSED session_start
+        # Walk backward — skip session_starts that already have a summary after them
         last_start_idx = -1
-        for i, e in enumerate(all_events):
-            if e.get("type") == "session_start":
-                last_start_idx = i
+        for i in range(len(all_events) - 1, -1, -1):
+            if all_events[i].get("type") == "session_start":
+                # Check if there's a session_summary after this start
+                has_summary = any(
+                    all_events[j].get("type") == "session_summary"
+                    for j in range(i + 1, len(all_events))
+                )
+                if not has_summary:
+                    last_start_idx = i
+                    break
+        if last_start_idx < 0:
+            # All sessions are closed — use the very last start
+            for i in range(len(all_events) - 1, -1, -1):
+                if all_events[i].get("type") == "session_start":
+                    last_start_idx = i
+                    break
         if last_start_idx < 0:
             return
         session_events = [e for e in all_events[last_start_idx + 1:]
-                          if e.get("type") != "session_summary"]
+                          if e.get("type") not in ("session_summary", "session_start")]
 
     edits_total = 0
     edits_no_read = 0
