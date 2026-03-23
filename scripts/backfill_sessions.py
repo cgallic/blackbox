@@ -7,11 +7,10 @@ analyzes them for failure signals, and writes retro-session JSONL logs
 to the target project's .claude/sessions/ directory.
 
 Usage:
-    python scripts/backfill_sessions.py <project-key> [--output-dir <dir>]
-
-Example:
-    python scripts/backfill_sessions.py C--Users-cgall-OneDrive-Desktop-Dev-adminpanelnew
-    python scripts/backfill_sessions.py E--Dev2-CMO-Agent-System --output-dir .claude/sessions
+    python scripts/backfill_sessions.py                           # List projects
+    python scripts/backfill_sessions.py <project-key>             # Backfill
+    python scripts/backfill_sessions.py <project-key> --product MyApp
+    python scripts/backfill_sessions.py <project-key> --output-dir .claude/sessions
 """
 
 import json
@@ -23,52 +22,60 @@ from datetime import datetime
 from pathlib import Path
 from collections import Counter
 
+# Fix Windows console encoding
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 CLAUDE_DIR = os.path.expanduser("~/.claude/projects")
 
-# Patterns that indicate user corrections
+# Patterns that indicate user corrections.
+# Each pattern is tested against the full user message (lowercased).
+# Only strong, unambiguous signals are included to minimize false positives.
 CORRECTION_PATTERNS = [
-    # Strong signals — user explicitly correcting Claude
+    # Explicit rejection of Claude's output
     (r'\bno[,.]?\s+(not |don\'t |stop |that\'s wrong|that\'s not)', 'explicit_no'),
     (r'\bthat\'s wrong\b', 'wrong'),
     (r'\bthat\'s not (right|correct|what)\b', 'not_right'),
     (r'\bnot that\b', 'not_that'),
-    (r'\bundo (that|this|it)\b', 'undo'),
+    # Undo/revert requests (require object to reduce false positives)
+    (r'\bundo (that|this|it|the)\b', 'undo'),
     (r'\brevert (that|this|it|the)\b', 'revert'),
+    # Direct behavioral corrections
     (r'\bdon\'t do that\b', 'dont_do'),
     (r'\bstop (doing|adding|changing|making|it)\b', 'stop_doing'),
     (r'\bthat\'s not what i\b', 'not_what_i_wanted'),
     (r'\bstart over\b', 'start_over'),
+    # Breakage signals
     (r'\byou broke\b', 'you_broke'),
     (r'\bthat broke\b', 'that_broke'),
+    # Context/listening failures
     (r'\bwhy did you\b', 'why_did_you'),
     (r'\bi (already )?(said|told|asked)\b', 'i_said'),
+    # Overengineering signals
     (r'\btoo complex\b', 'too_complex'),
     (r'\bover.?engineer', 'overengineered'),
     (r'\bsimpler\b', 'simpler'),
     (r'\bjust do\b', 'just_do'),
-    (r'\byou suck\b', 'frustration'),
+    # Interruptions (Claude Code specific)
     (r'\bRequest interrupted by user\b', 'interrupted'),
 ]
 
-# Patterns in tool results that indicate errors
+# Patterns in tool results/assistant messages that indicate errors caused by Claude.
+# Intentionally conservative — only matches unambiguous error indicators.
 ERROR_PATTERNS = [
-    (r'Error:', 'error'),
-    (r'error:', 'error'),
-    (r'ENOENT', 'file_not_found'),
-    (r'TypeError', 'type_error'),
-    (r'SyntaxError', 'syntax_error'),
-    (r'ReferenceError', 'reference_error'),
-    (r'ECONNREFUSED', 'connection_error'),
     (r'Exit code [1-9]', 'nonzero_exit'),
-    (r'ModuleNotFoundError', 'module_not_found'),
+    (r'TypeError:', 'type_error'),
+    (r'SyntaxError:', 'syntax_error'),
+    (r'ReferenceError:', 'reference_error'),
+    (r'ModuleNotFoundError:', 'module_not_found'),
     (r'Cannot find module', 'module_not_found'),
+    (r'ENOENT:', 'file_not_found'),
+    (r'ECONNREFUSED', 'connection_error'),
     (r'compilation failed', 'build_error'),
     (r'Build error', 'build_error'),
-    (r'FAILED', 'test_failure'),
-    (r'failed', 'test_failure'),
 ]
 
-# Patterns indicating approach changes
+# Patterns indicating the user redirected the approach
 APPROACH_PATTERNS = [
     (r'\bactually\b.*\binstead\b', 'approach_change'),
     (r'\blet\'s try\b.*\bdifferent\b', 'approach_change'),
@@ -79,6 +86,40 @@ APPROACH_PATTERNS = [
 ]
 
 
+def derive_product_name(project_key):
+    """Derive a human-readable product name from the project key.
+
+    Project keys look like 'C--Users-cgall-OneDrive-Desktop-Dev-adminpanelnew'
+    or 'E--Dev2-CMO-Agent-System'. We take the last segment.
+    """
+    parts = project_key.replace('\\', '-').replace('/', '-').split('-')
+    # Filter out empty strings and drive letters
+    parts = [p for p in parts if p and len(p) > 1]
+    if parts:
+        return parts[-1]
+    return project_key[:20]
+
+
+def extract_text(content):
+    """Extract text from a message content field (string or content blocks list)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    text_parts.append(block.get('text', ''))
+                elif block.get('type') == 'tool_result':
+                    result_content = block.get('content', '')
+                    if isinstance(result_content, str):
+                        text_parts.append(result_content)
+            elif isinstance(block, str):
+                text_parts.append(block)
+        return ' '.join(text_parts)
+    return str(content) if content else ''
+
+
 def parse_session(filepath):
     """Parse a single session transcript .jsonl file."""
     events = []
@@ -86,27 +127,19 @@ def parse_session(filepath):
 
     try:
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            for line_num, line in enumerate(f):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    entry = json.loads(line)
-                    events.append(entry)
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
     except Exception as e:
         print(f"  Error reading {filepath}: {e}", file=sys.stderr)
         return None
 
-    if not events:
-        return None
-
-    return {
-        'session_id': session_id,
-        'events': events,
-        'filepath': filepath,
-    }
+    return {'session_id': session_id, 'events': events} if events else None
 
 
 def analyze_session(session_data):
@@ -114,12 +147,9 @@ def analyze_session(session_data):
     events = session_data['events']
     session_id = session_data['session_id']
 
-    # Extract metadata
     first_ts = None
     last_ts = None
     branch = None
-    user_messages = []
-    assistant_messages = []
     tool_errors = []
     user_corrections = []
     approach_changes = []
@@ -139,109 +169,61 @@ def analyze_session(session_data):
         entry_type = entry.get('type', '')
         message = entry.get('message', {})
 
-        if isinstance(message, dict):
-            role = message.get('role', '')
-            content = message.get('content', '')
+        if not isinstance(message, dict):
+            continue
 
-            # Handle content that's a list of content blocks
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get('type') == 'text':
-                            text_parts.append(block.get('text', ''))
-                        elif block.get('type') == 'tool_result':
-                            result_content = block.get('content', '')
-                            if isinstance(result_content, str):
-                                text_parts.append(result_content)
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                content = ' '.join(text_parts)
+        role = message.get('role', '')
+        content = extract_text(message.get('content', ''))
 
-            if not isinstance(content, str):
-                content = str(content) if content else ''
+        if role == 'user' and entry_type == 'user':
+            total_user_msgs += 1
+            content_lower = content.lower()
 
-            if role == 'user' and entry_type == 'user':
-                total_user_msgs += 1
-                user_messages.append({'ts': ts, 'content': content[:500]})
-
-                # Check for corrections
-                content_lower = content.lower()
-                for pattern, label in CORRECTION_PATTERNS:
-                    if re.search(pattern, content_lower):
-                        if label == 'interrupted':
-                            interruptions += 1
-                        else:
-                            user_corrections.append({
-                                'ts': ts,
-                                'type': label,
-                                'snippet': content[:200],
-                            })
-                        break  # One correction per message
-
-                # Check for approach changes
-                for pattern, label in APPROACH_PATTERNS:
-                    if re.search(pattern, content_lower):
-                        approach_changes.append({
+            # Check for corrections (one per message, first match wins)
+            for pattern, label in CORRECTION_PATTERNS:
+                if re.search(pattern, content_lower):
+                    if label == 'interrupted':
+                        interruptions += 1
+                    else:
+                        user_corrections.append({
                             'ts': ts,
                             'type': label,
                             'snippet': content[:200],
                         })
-                        break
+                    break
 
-            elif role == 'assistant':
-                assistant_messages.append({'ts': ts, 'content': content[:200]})
+            # Check for approach changes
+            for pattern, label in APPROACH_PATTERNS:
+                if re.search(pattern, content_lower):
+                    approach_changes.append({
+                        'ts': ts, 'type': label, 'snippet': content[:200],
+                    })
+                    break
 
-                # Check for tool errors in assistant messages that contain tool results
-                for pattern, label in ERROR_PATTERNS:
-                    if re.search(pattern, content):
-                        tool_errors.append({
-                            'ts': ts,
-                            'type': label,
-                            'snippet': content[:200],
-                        })
-                        break
-
-        # Also check tool_result type entries
-        if entry_type == 'tool_result' or entry.get('type') == 'tool_result':
-            result = entry.get('content', '') or entry.get('output', '') or ''
-            if isinstance(result, list):
-                result = ' '.join(str(r) for r in result)
-            if isinstance(result, str):
-                for pattern, label in ERROR_PATTERNS:
-                    if re.search(pattern, result):
-                        tool_errors.append({
-                            'ts': ts or last_ts,
-                            'type': label,
-                            'snippet': result[:200],
-                        })
-                        break
+        elif role == 'assistant':
+            for pattern, label in ERROR_PATTERNS:
+                if re.search(pattern, content):
+                    tool_errors.append({
+                        'ts': ts, 'type': label, 'snippet': content[:200],
+                    })
+                    break
 
     if not first_ts:
         return None
 
-    # Score the session
-    correction_count = len(user_corrections)
-    error_count = len(tool_errors)
-    approach_count = len(approach_changes)
+    # Score the session based on objective signals
+    breakage = sum(1 for c in user_corrections if c['type'] in
+                   ('you_broke', 'that_broke', 'revert', 'undo'))
+    accuracy = max(1, min(10, 10 - (breakage * 2) - (len(tool_errors) * 0.5)))
 
-    # Accuracy: penalized by errors and corrections that indicate breakage
-    breakage_corrections = sum(1 for c in user_corrections if c['type'] in
-                              ('you_broke', 'that_broke', 'revert', 'undo'))
-    accuracy = max(1, 10 - (breakage_corrections * 2) - (error_count * 0.5))
-    accuracy = min(10, accuracy)
+    overeng = sum(1 for c in user_corrections if c['type'] in
+                  ('overengineered', 'too_complex', 'simpler', 'just_do', 'start_over'))
+    efficiency = max(1, min(10, 10 - (len(approach_changes) * 1.5)
+                            - (interruptions * 0.5) - (overeng * 2)))
 
-    # Efficiency: penalized by approach changes, interruptions, and "just do" / "simpler" corrections
-    efficiency_corrections = sum(1 for c in user_corrections if c['type'] in
-                                ('overengineered', 'too_complex', 'simpler', 'just_do', 'start_over'))
-    efficiency = max(1, 10 - (approach_count * 1.5) - (interruptions * 0.5) - (efficiency_corrections * 2))
-    efficiency = min(10, efficiency)
-
-    # Context: penalized by "I said", "already told", "why did you" corrections
-    context_corrections = sum(1 for c in user_corrections if c['type'] in
-                             ('i_said', 'already_told', 'why_did_you', 'shouldnt'))
-    context = max(1, 10 - (context_corrections * 2.5))
-    context = min(10, context)
+    context_fails = sum(1 for c in user_corrections if c['type'] in
+                        ('i_said', 'why_did_you'))
+    context = max(1, min(10, 10 - (context_fails * 2.5)))
 
     composite = round((accuracy * 0.4) + (efficiency * 0.3) + (context * 0.3), 1)
 
@@ -252,7 +234,7 @@ def analyze_session(session_data):
         'branch': branch,
         'total_user_msgs': total_user_msgs,
         'user_corrections': user_corrections,
-        'tool_errors': tool_errors[:10],  # Cap at 10
+        'tool_errors': tool_errors[:10],
         'approach_changes': approach_changes,
         'interruptions': interruptions,
         'scores': {
@@ -264,30 +246,27 @@ def analyze_session(session_data):
     }
 
 
-def write_session_log(analysis, output_dir):
+def write_session_log(analysis, output_dir, product_name):
     """Write a retro-session JSONL log from analysis results."""
     ts = analysis['first_ts']
     try:
         dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
         filename = dt.strftime('%Y-%m-%d-%H%M%S') + '.jsonl'
-    except:
+    except Exception:
         filename = f"backfill-{analysis['session_id'][:8]}.jsonl"
 
     filepath = os.path.join(output_dir, filename)
-
     lines = []
 
-    # Session start
     lines.append(json.dumps({
         'type': 'session_start',
         'ts': analysis['first_ts'],
-        'product': 'KaiCalls',
+        'product': product_name,
         'branch': analysis['branch'] or 'unknown',
         'task_summary': f'Backfilled from transcript {analysis["session_id"][:8]}',
         'backfilled': True,
     }))
 
-    # User corrections
     for corr in analysis['user_corrections']:
         lines.append(json.dumps({
             'type': 'user_correction',
@@ -296,7 +275,6 @@ def write_session_log(analysis, output_dir):
             'context': corr['snippet'][:150],
         }))
 
-    # Errors
     for err in analysis['tool_errors'][:5]:
         lines.append(json.dumps({
             'type': 'error',
@@ -306,7 +284,6 @@ def write_session_log(analysis, output_dir):
             'was_my_fault': True,
         }))
 
-    # Approach changes
     for ac in analysis['approach_changes']:
         lines.append(json.dumps({
             'type': 'approach_change',
@@ -316,7 +293,6 @@ def write_session_log(analysis, output_dir):
             'reason': ac['snippet'][:150],
         }))
 
-    # Session end
     lines.append(json.dumps({
         'type': 'session_end',
         'ts': analysis['last_ts'],
@@ -336,7 +312,7 @@ def write_session_log(analysis, output_dir):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python backfill_sessions.py <project-key> [--output-dir <dir>]")
+        print("Usage: python backfill_sessions.py <project-key> [--product NAME] [--output-dir DIR]")
         print("\nAvailable projects:")
         for d in sorted(os.listdir(CLAUDE_DIR)):
             jsonl_count = len(glob.glob(os.path.join(CLAUDE_DIR, d, '*.jsonl')))
@@ -347,15 +323,25 @@ def main():
     project_key = sys.argv[1]
     project_dir = os.path.join(CLAUDE_DIR, project_key)
 
-    # Output directory
+    # Parse optional args
     output_dir = None
-    if '--output-dir' in sys.argv:
-        idx = sys.argv.index('--output-dir')
-        if idx + 1 < len(sys.argv):
-            output_dir = sys.argv[idx + 1]
+    product_name = None
+    args = sys.argv[2:]
+    i = 0
+    while i < len(args):
+        if args[i] == '--output-dir' and i + 1 < len(args):
+            output_dir = args[i + 1]
+            i += 2
+        elif args[i] == '--product' and i + 1 < len(args):
+            product_name = args[i + 1]
+            i += 2
+        else:
+            i += 1
 
     if not output_dir:
         output_dir = os.path.join(os.getcwd(), '.claude', 'sessions')
+    if not product_name:
+        product_name = derive_product_name(project_key)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -363,14 +349,13 @@ def main():
         print(f"Error: Project directory not found: {project_dir}")
         sys.exit(1)
 
-    # Find all session transcripts
     transcript_files = sorted(glob.glob(os.path.join(project_dir, '*.jsonl')))
     print(f"Found {len(transcript_files)} session transcripts in {project_key}")
+    print(f"Product name: {product_name}")
     print(f"Output directory: {output_dir}")
     print()
 
     all_analyses = []
-    low_score_sessions = []
     correction_types = Counter()
     error_types = Counter()
 
@@ -385,17 +370,12 @@ def main():
 
         all_analyses.append(analysis)
 
-        # Track stats
         for corr in analysis['user_corrections']:
             correction_types[corr['type']] += 1
         for err in analysis['tool_errors']:
             error_types[err['type']] += 1
 
-        if analysis['scores']['composite'] < 7:
-            low_score_sessions.append(analysis)
-
-        # Write individual session log
-        outpath = write_session_log(analysis, output_dir)
+        write_session_log(analysis, output_dir, product_name)
 
         score = analysis['scores']['composite']
         corrs = len(analysis['user_corrections'])
@@ -406,7 +386,6 @@ def main():
             print(f"  [{i+1}/{len(transcript_files)}] {analysis['session_id'][:8]}... "
                   f"score={score} corrections={corrs} errors={errs}{marker}")
 
-    # Summary
     print(f"\n{'='*60}")
     print(f"BACKFILL COMPLETE")
     print(f"{'='*60}")
@@ -414,18 +393,16 @@ def main():
     print(f"Session logs written to: {output_dir}")
 
     if all_analyses:
-        avg_score = sum(a['scores']['composite'] for a in all_analyses) / len(all_analyses)
-        avg_accuracy = sum(a['scores']['accuracy'] for a in all_analyses) / len(all_analyses)
-        avg_efficiency = sum(a['scores']['efficiency'] for a in all_analyses) / len(all_analyses)
-        avg_context = sum(a['scores']['context'] for a in all_analyses) / len(all_analyses)
+        avg = lambda key: sum(a['scores'][key] for a in all_analyses) / len(all_analyses)
+        print(f"\nAvg Composite Score: {avg('composite'):.1f}/10")
+        print(f"  Accuracy:   {avg('accuracy'):.1f}")
+        print(f"  Efficiency: {avg('efficiency'):.1f}")
+        print(f"  Context:    {avg('context'):.1f}")
 
-        print(f"\nAvg Composite Score: {avg_score:.1f}/10")
-        print(f"  Accuracy:   {avg_accuracy:.1f}")
-        print(f"  Efficiency: {avg_efficiency:.1f}")
-        print(f"  Context:    {avg_context:.1f}")
-
-        print(f"\nSessions scoring < 7: {len(low_score_sessions)}/{len(all_analyses)}")
-        print(f"Sessions scoring < 5: {sum(1 for a in all_analyses if a['scores']['composite'] < 5)}/{len(all_analyses)}")
+        low = sum(1 for a in all_analyses if a['scores']['composite'] < 7)
+        vlow = sum(1 for a in all_analyses if a['scores']['composite'] < 5)
+        print(f"\nSessions scoring < 7: {low}/{len(all_analyses)}")
+        print(f"Sessions scoring < 5: {vlow}/{len(all_analyses)}")
 
         if correction_types:
             print(f"\nTop Correction Types:")
@@ -437,7 +414,6 @@ def main():
             for etype, count in error_types.most_common(10):
                 print(f"  {etype}: {count}x")
 
-        # Show worst sessions
         worst = sorted(all_analyses, key=lambda a: a['scores']['composite'])[:5]
         if worst:
             print(f"\nWorst 5 Sessions:")

@@ -44,33 +44,43 @@ fi
 
 # 5. Merge hooks into settings.local.json
 SETTINGS="$PROJECT_DIR/.claude/settings.local.json"
-if [ -f "$SETTINGS" ]; then
-    # Check if hooks already configured
-    if python -c "import json; d=json.load(open('$SETTINGS')); exit(0 if 'hooks' in d else 1)" 2>/dev/null; then
-        echo "[skip] Hooks already in settings.local.json — merge manually if needed"
-    else
-        python -c "
+HOOKS_JSON="$RETRO_DIR/hooks.json"
+
+python3 - "$SETTINGS" "$HOOKS_JSON" <<'PYEOF'
 import json
-with open('$SETTINGS') as f:
-    settings = json.load(f)
-settings['hooks'] = $(cat "$RETRO_DIR/hooks.json")
-with open('$SETTINGS', 'w') as f:
+import sys
+import os
+
+settings_path = sys.argv[1]
+hooks_path = sys.argv[2]
+
+# Load existing settings or start fresh
+settings = {}
+if os.path.exists(settings_path):
+    try:
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        pass
+
+# If hooks already exist, don't overwrite
+if "hooks" in settings:
+    print("[skip] Hooks already in settings.local.json -- merge manually if needed")
+    sys.exit(0)
+
+# Load hooks template
+with open(hooks_path, "r") as f:
+    hooks = json.load(f)
+
+settings["hooks"] = hooks
+
+os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+with open(settings_path, "w") as f:
     json.dump(settings, f, indent=2)
-    f.write('\n')
-"
-        echo "[ok] Merged hooks into settings.local.json"
-    fi
-else
-    # Create new settings with hooks
-    python -c "
-import json
-settings = {'hooks': $(cat "$RETRO_DIR/hooks.json")}
-with open('$SETTINGS', 'w') as f:
-    json.dump(settings, f, indent=2)
-    f.write('\n')
-"
-    echo "[ok] Created settings.local.json with hooks"
-fi
+    f.write("\n")
+
+print("[ok] Merged hooks into settings.local.json")
+PYEOF
 
 echo ""
 echo "Project setup complete!"

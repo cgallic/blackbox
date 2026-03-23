@@ -4,7 +4,6 @@ import sys
 import json
 import os
 import re
-import hashlib
 from datetime import datetime, timezone
 
 DANGEROUS_PATTERNS = [
