@@ -16,6 +16,7 @@ def main():
     for name in [
         f"claude-reads-{h}.txt",
         f"claude-tested-{h}.txt",
+        f"claude-tested-files-{h}.txt",
         f"claude-violations-{h}.json",
         f"claude-override-{h}.json",
     ]:

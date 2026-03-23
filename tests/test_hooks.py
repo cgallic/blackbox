@@ -882,9 +882,101 @@ def test_blackbox_cli():
         test("has backfill command", 'backfill)' in content)
 
 
+def test_diff_aware_commit():
+    """check_commit.py should detect changed files and require relevant tests."""
+    print("\n--- Diff-Aware Commit Enforcement ---")
+
+    # Test the mapping logic directly
+    sys.path.insert(0, HOOKS_DIR)
+    from check_commit import find_expected_tests, check_test_coverage
+
+    # TypeScript files should map to .test.ts / .spec.ts
+    expected = find_expected_tests(["src/auth.ts", "src/db.ts", "README.md"])
+    test("maps auth.ts to test patterns", "src/auth.ts" in expected)
+    test("maps db.ts to test patterns", "src/db.ts" in expected)
+    test("skips README.md", "README.md" not in expected)
+
+    if "src/auth.ts" in expected:
+        patterns = expected["src/auth.ts"]
+        test("auth.ts expects auth.test.ts", "auth.test.ts" in patterns)
+        test("auth.ts expects auth.spec.ts", "auth.spec.ts" in patterns)
+
+    # Python files should map to test_*.py / *_test.py
+    expected_py = find_expected_tests(["app/models.py", "config.yaml"])
+    test("maps models.py to test patterns", "app/models.py" in expected_py)
+    test("skips config.yaml", "config.yaml" not in expected_py)
+
+    if "app/models.py" in expected_py:
+        patterns = expected_py["app/models.py"]
+        test("models.py expects test_models.py", "test_models.py" in patterns)
+        test("models.py expects models_test.py", "models_test.py" in patterns)
+
+    # Go files
+    expected_go = find_expected_tests(["pkg/handler.go"])
+    test("maps handler.go to test patterns", "pkg/handler.go" in expected_go)
+    if "pkg/handler.go" in expected_go:
+        test("handler.go expects handler_test.go", "handler_test.go" in expected_go["pkg/handler.go"])
+
+    # Test files themselves should be skipped
+    expected_test = find_expected_tests(["src/auth.test.ts", "test_models.py"])
+    test("skips auth.test.ts (already a test)", "src/auth.test.ts" not in expected_test)
+    test("skips test_models.py (already a test)", "test_models.py" not in expected_test)
+
+    # Coverage check
+    covered, missing = check_test_coverage(
+        {"src/auth.ts": ["auth.test.ts", "auth.spec.ts"], "src/db.ts": ["db.test.ts", "db.spec.ts"]},
+        {"auth.test.ts", "other.test.ts"},
+    )
+    test("auth.ts is covered", len(covered) == 1 and covered[0][0] == "src/auth.ts")
+    test("db.ts is missing", len(missing) == 1 and missing[0][0] == "src/db.ts")
+
+
+def test_track_test_records_files():
+    """track_test.py should record which test files ran."""
+    print("\n--- Track Test File Recording ---")
+
+    tmpdir = tempfile.mkdtemp(prefix='blackbox-test-')
+    env = os.environ.copy()
+    env['CLAUDE_PROJECT_DIR'] = tmpdir
+
+    try:
+        hook_path = os.path.join(HOOKS_DIR, 'track_test.py')
+
+        # Simulate jest output with test file names
+        input_data = json.dumps({
+            'tool_name': 'Bash',
+            'tool_input': {'command': 'npx jest'},
+            'tool_response': 'PASS src/auth.test.ts (0.5s)\nPASS src/db.test.ts (0.3s)\nTests: 5 passed, 5 total',
+        }).encode()
+
+        result = subprocess.run(
+            [sys.executable, hook_path],
+            input=input_data, capture_output=True, env=env, timeout=10,
+        )
+        test("exits cleanly", result.returncode == 0)
+
+        h = __import__('hashlib').md5(tmpdir.encode()).hexdigest()[:8]
+        tested_files_path = os.path.join(tempfile.gettempdir(), f"claude-tested-files-{h}.txt")
+        test("creates tested-files tracker", os.path.exists(tested_files_path))
+
+        if os.path.exists(tested_files_path):
+            with open(tested_files_path) as f:
+                content = f.read()
+            test("records auth.test.ts", "auth.test.ts" in content)
+            test("records db.test.ts", "db.test.ts" in content)
+
+        # Cleanup
+        for name in [f"claude-tested-{h}.txt", f"claude-tested-files-{h}.txt"]:
+            path = os.path.join(tempfile.gettempdir(), name)
+            if os.path.exists(path):
+                os.remove(path)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
-    print("retro-loop test suite")
-    print("=====================")
+    print("blackbox test suite")
+    print("===================")
 
     test_track_read()
     test_track_read_empty_input()
@@ -909,6 +1001,8 @@ def main():
     test_violations_module()
     test_override_cli()
     test_session_lifecycle()
+    test_diff_aware_commit()
+    test_track_test_records_files()
     test_backfill_patterns()
     test_setup_syntax()
     test_version()

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""PostToolUse hook for Bash: detect test commands and verify they PASSED.
+"""PostToolUse hook for Bash: detect test commands, verify they PASSED, track which files were tested.
 
-Only writes the "tested" marker if the test command actually passed
-(exit code 0 and no error indicators in response).
+Writes two things:
+1. "passed" marker to temp file (for check_commit.py)
+2. List of test files that ran to temp file (for diff-aware enforcement)
 """
 import sys
 import json
@@ -25,7 +26,6 @@ TEST_PATTERNS = [
     r'\bpnpm\s+test\b',
 ]
 
-# Indicators that tests failed (checked against tool_response)
 FAILURE_INDICATORS = [
     r'FAILED',
     r'FAIL[^A-Z]',
@@ -40,6 +40,26 @@ FAILURE_INDICATORS = [
     r'AssertError',
 ]
 
+# Patterns to extract test file names from test output
+TEST_FILE_PATTERNS = [
+    r'PASS\s+(\S+\.(?:test|spec)\.\S+)',       # jest: PASS src/auth.test.ts
+    r'FAIL\s+(\S+\.(?:test|spec)\.\S+)',       # jest: FAIL src/auth.test.ts
+    r'(\S+\.(?:test|spec)\.\S+)\s+\(\d',      # vitest: auth.test.ts (0.5s)
+    r'(\S+test\S*\.py)\b',                      # pytest: test_auth.py or auth_test.py
+    r'(\S+_test\.go)\b',                        # go: auth_test.go
+    r'(\S+\.test\.\S+)',                        # generic: *.test.*
+    r'(\S+\.spec\.\S+)',                        # generic: *.spec.*
+]
+
+
+def extract_test_files(output):
+    """Extract test file paths from test runner output."""
+    files = set()
+    for pattern in TEST_FILE_PATTERNS:
+        for match in re.finditer(pattern, output):
+            files.add(match.group(1))
+    return files
+
 
 def main():
     try:
@@ -51,35 +71,36 @@ def main():
     if not cmd:
         return
 
-    is_test_cmd = False
-    for pattern in TEST_PATTERNS:
-        if re.search(pattern, cmd, re.I):
-            is_test_cmd = True
-            break
-
+    is_test_cmd = any(re.search(p, cmd, re.I) for p in TEST_PATTERNS)
     if not is_test_cmd:
         return
 
-    # Check if tests actually passed by examining tool_response
     response = data.get("tool_response", "")
     if isinstance(response, dict):
         response = json.dumps(response)
+    response = str(response)
 
-    tests_passed = True
+    tests_passed = not any(re.search(p, response) for p in FAILURE_INDICATORS)
 
-    # Check for failure indicators in response
-    for pattern in FAILURE_INDICATORS:
-        if re.search(pattern, str(response)):
-            tests_passed = False
-            break
+    proj_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
+    h = hashlib.md5(proj_dir.encode()).hexdigest()[:8]
+    tmp = tempfile.gettempdir()
 
-    # Only mark as tested if tests passed
     if tests_passed:
-        proj_dir = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-        h = hashlib.md5(proj_dir.encode()).hexdigest()[:8]
-        tested_file = os.path.join(tempfile.gettempdir(), f"claude-tested-{h}.txt")
-        with open(tested_file, "w") as f:
+        with open(os.path.join(tmp, f"claude-tested-{h}.txt"), "w") as f:
             f.write("passed")
+
+    # Track which test files ran (regardless of pass/fail)
+    test_files = extract_test_files(response)
+
+    # Also extract from the command itself (e.g. "npx jest auth.test.ts")
+    test_files |= extract_test_files(cmd)
+
+    if test_files:
+        tested_files_path = os.path.join(tmp, f"claude-tested-files-{h}.txt")
+        with open(tested_files_path, "a", encoding="utf-8") as f:
+            for tf in test_files:
+                f.write(tf + "\n")
 
 
 if __name__ == "__main__":

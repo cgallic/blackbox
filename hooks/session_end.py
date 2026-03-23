@@ -75,6 +75,8 @@ def main():
             commits_total += 1
             tested = e.get("tests_passed_first", e.get("tests_ran_first", False))
             overridden = e.get("was_overridden", False)
+            missing_tests = e.get("tests_missing", [])
+            covered_tests = e.get("tests_covered", [])
             if not tested:
                 commits_no_test += 1
                 if overridden:
@@ -82,8 +84,13 @@ def main():
                     timeline.append(f"  {ts_short}  COMMIT (override: no tests)")
                 else:
                     timeline.append(f"  {ts_short}  COMMIT ** NO TESTS **")
+            elif missing_tests:
+                commits_no_test += 1
+                for src in missing_tests[:3]:
+                    timeline.append(f"  {ts_short}  COMMIT ** UNTESTED: {src} **")
             else:
-                timeline.append(f"  {ts_short}  COMMIT (tests passed)")
+                cov = f" ({len(covered_tests)} files covered)" if covered_tests else ""
+                timeline.append(f"  {ts_short}  COMMIT (tests passed{cov})")
 
         elif t == "safety_trigger":
             safety_total += 1
