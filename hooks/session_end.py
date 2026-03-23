@@ -180,8 +180,8 @@ def main():
             lines.append(f"|    - {label:<53s}|")
 
     lines.append("|                                                          |")
-    lines.append("|  Run /retro-session for full scoring + corrections.      |")
-    lines.append("|  Run /retro weekly to mine patterns and update rules.    |")
+    lines.append("|  Run /blackbox-scorecard for full scoring + corrections.      |")
+    lines.append("|  Run /blackbox-retro weekly to mine patterns and update rules.    |")
     lines.append("|                                                          |")
     lines.append("+----------------------------------------------------------+")
 

@@ -574,7 +574,7 @@ def test_session_end_scorecard():
             test("scorecard shows guardrails section", "Guardrails triggered:" in scorecard)
             test("scorecard shows edit blocked count", "Edit blocked (no read):" in scorecard)
             test("scorecard shows session totals", "Session totals:" in scorecard)
-            test("scorecard shows retro hint", "/retro-session" in scorecard)
+            test("scorecard shows retro hint", "/blackbox-scorecard" in scorecard)
         else:
             test("outputs scorecard JSON", False, "no stdout output")
 
