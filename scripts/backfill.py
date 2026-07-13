@@ -28,37 +28,9 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 CLAUDE_DIR = os.path.expanduser("~/.claude/projects")
 
-# Patterns that indicate user corrections.
-# Each pattern is tested against the full user message (lowercased).
-# Only strong, unambiguous signals are included to minimize false positives.
-CORRECTION_PATTERNS = [
-    # Explicit rejection of Claude's output
-    (r'\bno[,.]?\s+(not |don\'t |stop |that\'s wrong|that\'s not)', 'explicit_no'),
-    (r'\bthat\'s wrong\b', 'wrong'),
-    (r'\bthat\'s not (right|correct|what)\b', 'not_right'),
-    (r'\bnot that\b', 'not_that'),
-    # Undo/revert requests (require object to reduce false positives)
-    (r'\bundo (that|this|it|the)\b', 'undo'),
-    (r'\brevert (that|this|it|the)\b', 'revert'),
-    # Direct behavioral corrections
-    (r'\bdon\'t do that\b', 'dont_do'),
-    (r'\bstop (doing|adding|changing|making|it)\b', 'stop_doing'),
-    (r'\bthat\'s not what i\b', 'not_what_i_wanted'),
-    (r'\bstart over\b', 'start_over'),
-    # Breakage signals
-    (r'\byou broke\b', 'you_broke'),
-    (r'\bthat broke\b', 'that_broke'),
-    # Context/listening failures
-    (r'\bwhy did you\b', 'why_did_you'),
-    (r'\bi (already )?(said|told|asked)\b', 'i_said'),
-    # Overengineering signals
-    (r'\btoo complex\b', 'too_complex'),
-    (r'\bover.?engineer', 'overengineered'),
-    (r'\bsimpler\b', 'simpler'),
-    (r'\bjust do\b', 'just_do'),
-    # Interruptions (Claude Code specific)
-    (r'\bRequest interrupted by user\b', 'interrupted'),
-]
+# Correction/approach patterns are shared with the live UserPromptSubmit hook.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'hooks'))
+from _corrections import CORRECTION_PATTERNS, APPROACH_PATTERNS  # noqa: E402
 
 # Patterns in tool results/assistant messages that indicate errors caused by Claude.
 # Intentionally conservative — only matches unambiguous error indicators.
@@ -73,16 +45,6 @@ ERROR_PATTERNS = [
     (r'ECONNREFUSED', 'connection_error'),
     (r'compilation failed', 'build_error'),
     (r'Build error', 'build_error'),
-]
-
-# Patterns indicating the user redirected the approach
-APPROACH_PATTERNS = [
-    (r'\bactually\b.*\binstead\b', 'approach_change'),
-    (r'\blet\'s try\b.*\bdifferent\b', 'approach_change'),
-    (r'\bforget that\b', 'approach_change'),
-    (r'\bscrap\b', 'approach_change'),
-    (r'\bchange of plan\b', 'approach_change'),
-    (r'\bnever\s?mind\b', 'approach_change'),
 ]
 
 

@@ -46,14 +46,14 @@ Done. Works immediately. No config needed.
 
 ## What It Tracks
 
-Seven hooks run silently during every Claude Code session:
+Eight hooks run silently during every Claude Code session:
 
 | Signal | What It Proves |
 |--------|---------------|
 | Read before Edit | Did Claude read the file before changing it? |
 | Test before Commit | Did Claude run tests before committing? |
 | Destructive commands | Did Claude try `rm -rf`, `DROP TABLE`, force push? |
-| User corrections | How many times did you redirect Claude? |
+| User corrections | How many times did you redirect Claude? Logged live, as you type them |
 | Session score | Weighted composite of accuracy, efficiency, context |
 
 All signals are **ground-truth** — logged by hooks Claude cannot manipulate. Separate from Claude's self-reporting.
@@ -64,6 +64,7 @@ All signals are **ground-truth** — logged by hooks Claude cannot manipulate. S
 blackbox report              # Full audit dashboard
 blackbox history             # Score trend over sessions
 blackbox backfill            # Mine past Claude Code sessions for patterns
+blackbox rules               # List and manage learned rules
 ```
 
 Inside Claude Code:
@@ -74,11 +75,11 @@ Inside Claude Code:
 
 ## How It Works
 
-**Hooks track.** Seven Python scripts fire on every Read, Edit, Bash command, and session lifecycle event. They write ground-truth signals to `.claude/sessions/compliance.jsonl`. You never touch them.
+**Hooks track.** Eight Python scripts fire on every Read, Edit, Bash command, user prompt, and session lifecycle event. They write ground-truth signals to `.claude/sessions/compliance.jsonl`. You never touch them. When you correct Claude ("no, that's wrong", "I already told you", "simpler"), that's logged live too.
 
 **Scorecard reports.** When your session ends, the Stop hook aggregates compliance data and prints the scorecard. No manual step required.
 
-**Rules learn.** Run `/retro` weekly. It mines session logs, finds repeating mistakes, and proposes rules for your CLAUDE.md. Rules have a lifecycle: Watch (2+ hits) → Important (4+) → Critical (caused breakage). Rules that stop triggering get archived automatically.
+**Rules learn — automatically.** Every session end, blackbox converts what went wrong (blocked edits, untested commits, your corrections) into rules in a persistent store (`.claude/sessions/rules.json`). Rules have a lifecycle: Watch (2+ hits) → Important (4+) → Critical (8+). Rules that stop triggering get archived automatically. At the start of your next session, the active rules — plus what failed last session — are injected into Claude's context, so the lesson is in front of the agent *before* it can repeat the mistake. Inspect or curate with `blackbox rules`. Run `/retro` weekly for deeper pattern mining and CLAUDE.md updates.
 
 ## Backfill Past Sessions
 
@@ -103,14 +104,14 @@ After: Scorecard shows "Commits without tests: 0/3 (100%)". The compliance hook 
 
 **3. "Claude makes the same mistake every session"**
 Before: You correct the same behavior across 5 sessions. It never sticks.
-After: `/retro` mines all 5 sessions, finds the pattern, proposes a CLAUDE.md rule: "When user says 'just do X', do exactly X (hit 7x)". The rule compounds across every future session.
+After: Each correction is logged the moment you type it. By the second session the pattern is a Watch rule; by the fourth it's Important — and every new session starts with that rule injected into Claude's context. `/retro` handles the deeper weekly curation. The lesson compounds instead of evaporating.
 
 ## What Gets Installed
 
 ```
 .claude/
-├── hooks/              # 7 compliance tracking hooks (automatic)
-├── sessions/           # Session logs + compliance data (gitignored)
+├── hooks/              # 8 compliance tracking hooks (automatic)
+├── sessions/           # Session logs, compliance data, learned rules (gitignored)
 └── settings.local.json # Hook configuration (auto-merged)
 
 ~/.claude/skills/
