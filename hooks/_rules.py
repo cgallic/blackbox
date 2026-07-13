@@ -14,6 +14,7 @@ Reads/writes <proj_dir>/.claude/sessions/rules.json:
 """
 import json
 import os
+import tempfile
 
 # Default rule text per known pattern key.
 RULE_TEXTS = {
@@ -42,27 +43,52 @@ def _empty_store():
     return {"version": 1, "rules": []}
 
 
+def _quarantine_corrupt(path):
+    """Move an unreadable store aside so the next save can't clobber it."""
+    try:
+        os.replace(path, path + ".corrupt")
+    except Exception:
+        pass
+
+
 def load_rules(proj_dir):
-    """Load the rules store. Missing/corrupt file returns an empty store."""
+    """Load the rules store. Missing file returns an empty store; a corrupt
+    file is preserved as rules.json.corrupt (recoverable) before an empty
+    store is returned — otherwise the next record_hit would permanently
+    overwrite every learned rule."""
     path = _rules_path(proj_dir)
+    if not os.path.exists(path):
+        return _empty_store()
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception:
+        _quarantine_corrupt(path)
         return _empty_store()
     if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
+        _quarantine_corrupt(path)
         return _empty_store()
     return data
 
 
 def save_rules(proj_dir, data):
-    """Write the rules store. Best-effort atomic: temp file + os.replace."""
+    """Write the rules store. Best-effort atomic: unique temp file in the
+    same directory + os.replace, so concurrent savers can't interleave
+    into each other's temp file."""
     path = _rules_path(proj_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix=".rules-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def status_for_hits(hits):

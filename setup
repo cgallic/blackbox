@@ -138,8 +138,8 @@ fi
 
 echo ""
 echo "Skills available:"
-echo "  /scorecard    Show agent compliance scorecard"
-echo "  /retro        Weekly retrospective and rule updates"
+echo "  /blackbox-scorecard    Show agent compliance scorecard"
+echo "  /blackbox-retro        Weekly retrospective and rule updates"
 echo ""
 
 # Suggest PATH addition

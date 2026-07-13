@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Shared correction-classification for blackbox hooks.
 
-NOT a standalone hook — imported by track_prompt.py.
-Patterns are ported verbatim from scripts/backfill.py so live tracking
-and backfilled history classify user messages identically.
+NOT a standalone hook — imported by track_prompt.py and scripts/backfill.py,
+so live tracking and backfilled history classify user messages identically.
+Patterns originated in backfill and are tuned here; false positives are
+expensive because each match deducts score AND feeds the rules store.
 """
 import re
 
@@ -15,7 +16,7 @@ CORRECTION_PATTERNS = [
     (r'\bno[,.]?\s+(not |don\'t |stop |that\'s wrong|that\'s not)', 'explicit_no'),
     (r'\bthat\'s wrong\b', 'wrong'),
     (r'\bthat\'s not (right|correct|what)\b', 'not_right'),
-    (r'\bnot that\b', 'not_that'),
+    (r'\bno,? not that\b', 'not_that'),
     # Undo/revert requests (require object to reduce false positives)
     (r'\bundo (that|this|it|the)\b', 'undo'),
     (r'\brevert (that|this|it|the)\b', 'revert'),
@@ -28,15 +29,16 @@ CORRECTION_PATTERNS = [
     (r'\byou broke\b', 'you_broke'),
     (r'\bthat broke\b', 'that_broke'),
     # Context/listening failures
-    (r'\bwhy did you\b', 'why_did_you'),
-    (r'\bi (already )?(said|told|asked)\b', 'i_said'),
+    (r'\bwhy did you\b(?!\s+guys)', 'why_did_you'),
+    (r'\bi already (said|told|asked)\b|\bi (said|told|asked) you\b', 'i_said'),
     # Overengineering signals
     (r'\btoo complex\b', 'too_complex'),
     (r'\bover.?engineer', 'overengineered'),
-    (r'\bsimpler\b', 'simpler'),
+    (r'\b(make|keep) (it|this|that) simpler\b|\bsimpler,? please\b', 'simpler'),
     (r'\bjust do\b', 'just_do'),
-    # Interruptions (Claude Code specific)
-    (r'\bRequest interrupted by user\b', 'interrupted'),
+    # Interruptions (Claude Code specific). Lowercase: always matched
+    # against lowercased text, an uppercase pattern can never fire.
+    (r'\brequest interrupted by user\b', 'interrupted'),
 ]
 
 # Patterns indicating the user redirected the approach
@@ -44,7 +46,7 @@ APPROACH_PATTERNS = [
     (r'\bactually\b.*\binstead\b', 'approach_change'),
     (r'\blet\'s try\b.*\bdifferent\b', 'approach_change'),
     (r'\bforget that\b', 'approach_change'),
-    (r'\bscrap\b', 'approach_change'),
+    (r'\bscrap (that|this|it|the)\b', 'approach_change'),
     (r'\bchange of plan\b', 'approach_change'),
     (r'\bnever\s?mind\b', 'approach_change'),
 ]

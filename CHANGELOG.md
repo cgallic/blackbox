@@ -10,7 +10,7 @@ Self-learning loop.
 - Session-end learning update: guardrail triggers and corrections become rule hits automatically; scorecard gains "User corrections" and "Learning" sections
 - `blackbox rules` CLI: list / add / archive / promote learned rules
 - Shared correction heuristics extracted to `hooks/_corrections.py` (used by live tracking; same patterns as backfill)
-- `/retro` skill reworked around the rules store; `/scorecard` skill includes corrections
+- `/blackbox-retro` skill reworked around the rules store; `/blackbox-scorecard` skill includes corrections
 - CI runs all test files; new test suites for corrections, rules store, and session learning
 
 ## 0.1.0 (2026-03-23)

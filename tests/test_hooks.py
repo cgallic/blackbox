@@ -836,7 +836,7 @@ def test_backfill_patterns():
     test("'git status' does NOT match corrections",
          not any(re.search(p, 'git status') for p, _ in bf.CORRECTION_PATTERNS))
     test("'Request interrupted by user' matches interrupted",
-         any(re.search(p, 'Request interrupted by user') for p, l in bf.CORRECTION_PATTERNS if l == 'interrupted'))
+         any(re.search(p, 'Request interrupted by user'.lower()) for p, l in bf.CORRECTION_PATTERNS if l == 'interrupted'))
 
 
 # ============================================================

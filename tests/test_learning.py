@@ -402,6 +402,57 @@ def test_end_second_fire_applies_delta_only():
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def test_end_fallback_path_ignores_foreign_summaries():
+    """Without a session_id, per-turn fires must still be delta-based against
+    OUR OWN previous summary, and a concurrent session's summaries must not
+    become the baseline or count as 'prior sessions'."""
+    print("\n--- session_end.py (sid-less fallback: foreign summaries) ---")
+    tmpdir, env = make_test_env()
+    try:
+        # Events carry no session_id; hook stdin carries none either.
+        seed_compliance(tmpdir, [
+            {"type": "session_start", "ts": "2026-07-13T10:00:00+00:00",
+             "session_id": "", "project_hash": "fb1"},
+            {"type": "edit_compliance", "ts": "2026-07-13T10:01:00+00:00",
+             "file": "/src/a.py", "was_read_first": False, "was_overridden": False},
+        ])
+        code, out, err = run_hook('session_end.py', {}, env)
+        test("fire 1 exits cleanly", code == 0, f"exit={code} err={err}")
+        rules = read_rules(tmpdir)
+        test("fire 1 records one hit",
+             rules.get("edit_without_read", {}).get("hits") == 1,
+             f"got {rules.get('edit_without_read')}")
+
+        # A concurrent session appends its own zero-count summary.
+        compliance = os.path.join(tmpdir, '.claude', 'sessions', 'compliance.jsonl')
+        with open(compliance, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                "type": "session_summary", "ts": "2026-07-13T10:02:00+00:00",
+                "session_id": "other-session", "score": 10.0,
+                "edits_total": 0, "edits_without_read": 0,
+                "commits_total": 0, "commits_without_test": 0,
+                "safety_triggers": 0,
+                "guardrails_triggered": {"edit_blocked": 0, "commit_blocked": 0,
+                                         "destructive_cmd_caught": 0},
+            }) + "\n")
+
+        code, out, err = run_hook('session_end.py', {}, env)
+        test("fire 2 exits cleanly", code == 0, f"exit={code} err={err}")
+        rules = read_rules(tmpdir)
+        test("foreign summary is not the delta baseline (hits stay 1)",
+             rules.get("edit_without_read", {}).get("hits") == 1,
+             f"got {rules.get('edit_without_read')}")
+
+        summaries = [e for e in read_compliance(tmpdir)
+                     if e['type'] == 'session_summary'
+                     and e.get('session_id') != 'other-session']
+        test("own summaries do not count as prior sessions",
+             summaries and summaries[-1].get('repeated_patterns') == [],
+             f"got {summaries[-1].get('repeated_patterns') if summaries else None}")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # ============================================================
 # Scorecard box integrity
 # ============================================================
@@ -477,6 +528,7 @@ def main():
     test_end_clean_session_increments_since_hit()
     test_end_archives_stale_rule()
     test_end_second_fire_applies_delta_only()
+    test_end_fallback_path_ignores_foreign_summaries()
     test_scorecard_box_integrity()
     test_learning_failure_still_prints_scorecard()
 

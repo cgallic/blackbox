@@ -1,5 +1,5 @@
 ---
-name: scorecard
+name: blackbox-scorecard
 description: Show the agent compliance scorecard for the current session. Displays ground-truth metrics from hooks — edits without reading, commits without testing, destructive commands, overrides used, and a session timeline. Use when user says "scorecard", "how am I doing", "show compliance", "session score", or "agent score".
 ---
 

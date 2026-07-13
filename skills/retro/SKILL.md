@@ -1,5 +1,5 @@
 ---
-name: retro
+name: blackbox-retro
 description: Weekly development retrospective. Mines session compliance data for repeating failure patterns, proposes CLAUDE.md rule updates, and auto-manages a strict rules section. Rules are max 1 line, directive, max 10 active (5 Critical + 5 Important). Use when user says "retro", "weekly retro", "retro-dev", "analyze sessions", "what mistakes do I keep making", or "update rules".
 ---
 
@@ -30,7 +30,7 @@ Find recurring patterns in compliance.jsonl that are NOT yet in the rules store.
 For each new pattern with 2+ occurrences, propose adding it:
 
 ```
-blackbox rules add "Never/Always [directive]." --key <rule_key>
+blackbox rules add "Never/Always [directive]." --key <rule_key> --hits <N>
 ```
 
 Rules must be:
@@ -83,7 +83,7 @@ Sessions analyzed: N | Score trend: improving/declining/stable
 Avg score: X.X
 
 Rules Updated:
-+ Added: "Never X" [candidate] (via blackbox rules add)
++ Added: "Never X" [watch] (Nx, via blackbox rules add)
 ^ Promoted: "Always Y" important -> critical (Nx)
 - Archived: "Check Z" (10 clean sessions)
 ```

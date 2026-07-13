@@ -7,7 +7,7 @@ Usage:
     python scripts/rules.py list --all            # Include archived rules
     python scripts/rules.py archive <id>          # Archive a rule
     python scripts/rules.py promote <id> <status> # Set status (watch|important|critical)
-    python scripts/rules.py add "<text>" [--key <id>]  # Add a manual rule
+    python scripts/rules.py add "<text>" [--key <id>] [--hits <N>]  # Add a manual rule
 
 Project dir comes from CLAUDE_PROJECT_DIR or the current directory.
 """
@@ -86,7 +86,7 @@ def cmd_promote(proj_dir, rule_id, status):
     sys.exit(1)
 
 
-def cmd_add(proj_dir, text, key=None):
+def cmd_add(proj_dir, text, key=None, hits=0):
     data = _rules.load_rules(proj_dir)
     existing = set(r.get("id") for r in data["rules"])
     if key is None:
@@ -97,19 +97,23 @@ def cmd_add(proj_dir, text, key=None):
     elif key in existing:
         print("Rule id already exists: {}".format(key))
         sys.exit(1)
+    # Manual adds start at least at watch; known hit counts can place higher.
+    status = _rules.status_for_hits(hits)
+    if _rules.STATUS_RANK.get(status, 0) < _rules.STATUS_RANK["watch"]:
+        status = "watch"
     ts = now_ts()
     data["rules"].append({
         "id": key,
         "text": text,
-        "status": "watch",
-        "hits": 0,
+        "status": status,
+        "hits": hits,
         "sessions_since_hit": 0,
-        "last_hit_ts": "",
+        "last_hit_ts": ts if hits else "",
         "created_ts": ts,
         "source": "manual",
     })
     _rules.save_rules(proj_dir, data)
-    print("Added rule {} (watch): {}".format(key, text))
+    print("Added rule {} ({}): {}".format(key, status, text))
 
 
 def main():
@@ -134,13 +138,20 @@ def main():
             print("Usage: rules.py add \"<text>\" [--key <id>]")
             sys.exit(1)
         key = None
+        hits = 0
         if "--key" in args:
             i = args.index("--key")
             if i + 1 >= len(args):
                 print("--key requires a value")
                 sys.exit(1)
             key = args[i + 1]
-        cmd_add(proj_dir, args[1], key)
+        if "--hits" in args:
+            i = args.index("--hits")
+            if i + 1 >= len(args) or not args[i + 1].isdigit():
+                print("--hits requires a number")
+                sys.exit(1)
+            hits = int(args[i + 1])
+        cmd_add(proj_dir, args[1], key, hits)
     else:
         print("Unknown command: {}".format(cmd))
         print("Commands: list [--all], archive <id>, promote <id> <status>, add \"<text>\" [--key <id>]")

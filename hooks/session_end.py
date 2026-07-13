@@ -19,6 +19,18 @@ def box_row(text):
     return "|" + text[:inner].ljust(inner) + "|"
 
 
+def is_own_summary(event, current_sid):
+    """True if a session_summary was written by the CURRENT session.
+
+    Stop fires once per turn, so earlier summaries of this session exist.
+    Without a session_id, our own summaries carry session_id "" (or the key
+    is absent), so empty matches empty.
+    """
+    if event.get("type") != "session_summary":
+        return False
+    return (event.get("session_id") or "") == (current_sid or "")
+
+
 def find_repeated_patterns(all_events, current_guardrails, current_sid=""):
     """Check prior session_summary entries for patterns that recur this session.
 
@@ -28,7 +40,7 @@ def find_repeated_patterns(all_events, current_guardrails, current_sid=""):
     """
     prior_summaries = [e for e in all_events
                        if e.get("type") == "session_summary"
-                       and (not current_sid or e.get("session_id") != current_sid)]
+                       and not is_own_summary(e, current_sid)]
     if not prior_summaries or not current_guardrails:
         return []
 
@@ -108,8 +120,10 @@ def main():
         last_start_idx = -1
         for i in range(len(all_events) - 1, -1, -1):
             if all_events[i].get("type") == "session_start":
+                # Only OUR summaries close our start; a concurrent session's
+                # summaries (they carry that session's id) do not.
                 has_summary = any(
-                    all_events[j].get("type") == "session_summary"
+                    is_own_summary(all_events[j], current_sid)
                     for j in range(i + 1, len(all_events))
                 )
                 if not has_summary:
@@ -128,15 +142,15 @@ def main():
     # Most recent summary already written for THIS session. The Stop hook
     # fires at the end of every turn, so later fires must only apply the
     # delta since the previous summary — otherwise rule hits double-count.
+    # A concurrent session's summaries must never become our baseline.
     prev_summary = None
     if current_sid:
         for e in all_events:
-            if (e.get("type") == "session_summary"
-                    and e.get("session_id") == current_sid):
+            if is_own_summary(e, current_sid):
                 prev_summary = e
     else:
         for e in all_events[last_start_idx + 1:]:
-            if e.get("type") == "session_summary":
+            if is_own_summary(e, current_sid):
                 prev_summary = e
 
     # --- COUNT SESSION SIGNALS ---

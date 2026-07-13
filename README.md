@@ -69,8 +69,8 @@ blackbox rules               # List and manage learned rules
 
 Inside Claude Code:
 ```
-/scorecard                   # Show scorecard for current session
-/retro                       # Weekly retrospective -- mine patterns, update rules
+/blackbox-scorecard          # Show scorecard for current session
+/blackbox-retro              # Weekly retrospective -- mine patterns, update rules
 ```
 
 ## How It Works
@@ -79,7 +79,7 @@ Inside Claude Code:
 
 **Scorecard reports.** When your session ends, the Stop hook aggregates compliance data and prints the scorecard. No manual step required.
 
-**Rules learn — automatically.** Every session end, blackbox converts what went wrong (blocked edits, untested commits, your corrections) into rules in a persistent store (`.claude/sessions/rules.json`). Rules have a lifecycle: Watch (2+ hits) → Important (4+) → Critical (8+). Rules that stop triggering get archived automatically. At the start of your next session, the active rules — plus what failed last session — are injected into Claude's context, so the lesson is in front of the agent *before* it can repeat the mistake. Inspect or curate with `blackbox rules`. Run `/retro` weekly for deeper pattern mining and CLAUDE.md updates.
+**Rules learn — automatically.** Every session end, blackbox converts what went wrong (blocked edits, untested commits, your corrections) into rules in a persistent store (`.claude/sessions/rules.json`). Rules have a lifecycle: Watch (2+ hits) → Important (4+) → Critical (8+). Rules that stop triggering get archived automatically. At the start of your next session, the active rules — plus what failed last session — are injected into Claude's context, so the lesson is in front of the agent *before* it can repeat the mistake. Inspect or curate with `blackbox rules`. Run `/blackbox-retro` weekly for deeper pattern mining and CLAUDE.md updates.
 
 ## Backfill Past Sessions
 
@@ -104,7 +104,7 @@ After: Scorecard shows "Commits without tests: 0/3 (100%)". The compliance hook 
 
 **3. "Claude makes the same mistake every session"**
 Before: You correct the same behavior across 5 sessions. It never sticks.
-After: Each correction is logged the moment you type it. By the second session the pattern is a Watch rule; by the fourth it's Important — and every new session starts with that rule injected into Claude's context. `/retro` handles the deeper weekly curation. The lesson compounds instead of evaporating.
+After: Each correction is logged the moment you type it. By the second session the pattern is a Watch rule; by the fourth it's Important — and every new session starts with that rule injected into Claude's context. `/blackbox-retro` handles the deeper weekly curation. The lesson compounds instead of evaporating.
 
 ## What Gets Installed
 
@@ -115,8 +115,8 @@ After: Each correction is logged the moment you type it. By the second session t
 └── settings.local.json # Hook configuration (auto-merged)
 
 ~/.claude/skills/
-├── blackbox/scorecard/ # /scorecard command
-└── blackbox/retro/     # /retro command
+├── blackbox-scorecard/ # /blackbox-scorecard command
+└── blackbox-retro/     # /blackbox-retro command
 ```
 
 No dependencies beyond Python 3.8 standard library. No network calls. No telemetry. All data stays on your machine.
