@@ -20,6 +20,9 @@ case "$1" in
   override)
     python "$BLACKBOX_DIR/hooks/_override.py" "${@:2}"
     ;;
+  rules)
+    python "$BLACKBOX_DIR/scripts/rules.py" "${@:2}"
+    ;;
   version)
     cat "$BLACKBOX_DIR/VERSION"
     ;;
@@ -34,17 +37,19 @@ case "$1" in
     echo "  history           Score trend over sessions"
     echo "  backfill [key]    Mine past Claude Code transcripts for patterns"
     echo "  override <action> Override a blocked action (edit|commit)"
+    echo "  rules             List and manage learned rules (list|add|archive|promote)"
     echo "  version           Print version"
     echo "  help              Show this help"
     echo ""
     echo "Inside Claude Code:"
-    echo "  /scorecard        Show scorecard for current session"
-    echo "  /retro            Weekly retrospective — mine patterns, update rules"
+    echo "  /blackbox-scorecard   Show scorecard for current session"
+    echo "  /blackbox-retro       Weekly retrospective — mine patterns, update rules"
     echo ""
     echo "Examples:"
     echo "  blackbox report --last 7"
     echo "  blackbox override edit --reason \"emergency hotfix\""
     echo "  blackbox backfill my-project-key"
+    echo "  blackbox rules list"
     ;;
   *)
     echo "Unknown command: $1"

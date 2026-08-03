@@ -1,5 +1,5 @@
 ---
-name: scorecard
+name: blackbox-scorecard
 description: Show the agent compliance scorecard for the current session. Displays ground-truth metrics from hooks — edits without reading, commits without testing, destructive commands, overrides used, and a session timeline. Use when user says "scorecard", "how am I doing", "show compliance", "session score", or "agent score".
 ---
 
@@ -16,8 +16,11 @@ Display the current session's compliance scorecard based on ground-truth hook da
    - `commit_compliance` events (tests_passed_first, was_overridden)
    - `safety_trigger` events (pattern, severity, occurrence)
    - `override_granted` events (action, reason)
+   - `user_correction` events (category, rule_key, snippet)
 4. Calculate session score (start at 10, deductions for violations)
 5. Build and display the scorecard
+
+Note: the Stop hook prints its own end-of-session scorecard with a "Learning" section (rules created/promoted/archived). This skill is the live in-session view — do not fabricate a Learning section from partial data.
 
 ## Score Calculation
 
@@ -25,6 +28,7 @@ Display the current session's compliance scorecard based on ground-truth hook da
 - Each unread edit: -1.0 (overridden: -0.5)
 - Each untested commit: -1.5 (overridden: -0.75)
 - Each safety trigger: -0.5
+- Each user correction: -0.3 (capped at -2.0 total)
 - Repeated violations (>5 total): -0.25 per additional
 
 ## Output Format
@@ -37,12 +41,16 @@ Display the current session's compliance scorecard based on ground-truth hook da
 |  Edits without reading first:  N / M          XX%        |
 |  Commits without tests:        N / M          XX%        |
 |  Destructive commands caught:  N                         |
+|  User corrections:             N  (top: simpler, i_said) |
 |  Timeline:                                               |
 |    HH:MM  EDIT file.py (read first)                      |
 |    HH:MM  EDIT other.py ** NOT READ **                   |
+|    HH:MM  CORRECTION simpler (overengineering)           |
 |    HH:MM  COMMIT (tests passed)                          |
 +----------------------------------------------------------+
 ```
+
+"User corrections" shows the count plus the top categories (e.g. `i_said`, `simpler`, `undo`).
 
 ## Rules
 

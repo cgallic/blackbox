@@ -8,4 +8,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python tests/test_hooks.py
+      - run: |
+          for t in tests/test_*.py; do
+            echo "=== $t ==="
+            python "$t"
+          done

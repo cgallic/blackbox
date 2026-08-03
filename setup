@@ -37,7 +37,7 @@ if git rev-parse --git-dir > /dev/null 2>&1; then
     HOOKS_DEST="$PROJECT_DIR/.claude/hooks"
     mkdir -p "$HOOKS_DEST"
 
-    for hook in session_init.py track_read.py check_edit.py track_test.py check_commit.py track_safety.py session_end.py _violations.py; do
+    for hook in session_init.py track_read.py check_edit.py track_test.py check_commit.py track_safety.py track_prompt.py session_end.py _violations.py _corrections.py _rules.py; do
         cp "$RETRO_DIR/hooks/$hook" "$HOOKS_DEST/$hook"
         echo "[ok]   Copied $hook"
     done
@@ -112,6 +112,9 @@ hooks_config = {
             ]
         }
     ],
+    "UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "python .claude/hooks/track_prompt.py", "timeout": 2}]}
+    ],
     "Stop": [
         {"hooks": [{"type": "command", "command": "python .claude/hooks/session_end.py", "timeout": 5}]}
     ]
@@ -135,8 +138,8 @@ fi
 
 echo ""
 echo "Skills available:"
-echo "  /scorecard    Show agent compliance scorecard"
-echo "  /retro        Weekly retrospective and rule updates"
+echo "  /blackbox-scorecard    Show agent compliance scorecard"
+echo "  /blackbox-retro        Weekly retrospective and rule updates"
 echo ""
 
 # Suggest PATH addition
